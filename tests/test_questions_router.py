@@ -114,8 +114,8 @@ def test_submit_answer_success(client):
     assert session_data["questions"][0]["answer"]["transcript_text"] == "Structured Query Language is used for relational databases."
 
 
-def test_submit_answer_update_existing(client):
-    """POST /questions/{question_id}/answer updates existing answer for same question."""
+def test_submit_answer_duplicate_rejected(client):
+    """POST /questions/{question_id}/answer rejects second answer for same question with 400."""
     db = SessionLocal()
     session = InterviewSession(candidate_name="Dana")
     db.add(session)
@@ -127,15 +127,15 @@ def test_submit_answer_update_existing(client):
     question_id = question.id
     db.close()
 
-    # Initial submission
+    # Initial submission succeeds
     res1 = client.post(f"/questions/{question_id}/answer", json={"transcript_text": "First attempt"})
     assert res1.status_code == status.HTTP_201_CREATED
     assert res1.json()["transcript_text"] == "First attempt"
 
-    # Second submission updates
+    # Second submission is rejected
     res2 = client.post(f"/questions/{question_id}/answer", json={"transcript_text": "Revised answer"})
-    assert res2.status_code == status.HTTP_201_CREATED
-    assert res2.json()["transcript_text"] == "Revised answer"
+    assert res2.status_code == status.HTTP_400_BAD_REQUEST
+    assert "already been submitted" in res2.json()["detail"].lower()
 
 
 def test_submit_answer_question_not_found(client):

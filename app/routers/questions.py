@@ -107,14 +107,10 @@ def submit_answer(
     try:
         existing_answer = db.query(Answer).filter(Answer.question_id == question_id).first()
         if existing_answer:
-            # Update existing answer with new transcript
-            existing_answer.transcript_text = payload.transcript_text
-            # TODO: Plug in evaluation service here to calculate score & feedback_text
-            existing_answer.score = payload.score if payload.score is not None else None
-            existing_answer.feedback_text = payload.feedback_text if payload.feedback_text is not None else None
-            db.commit()
-            db.refresh(existing_answer)
-            return existing_answer
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"An answer has already been submitted for question ID '{question_id}'.",
+            )
 
         # Create new Answer
         # TODO: Plug in evaluation service here to calculate score & feedback_text
