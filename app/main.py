@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from app.routers import sessions
+from app.routers import questions, sessions
 
 app = FastAPI(
     title="MockWise API",
@@ -8,6 +8,7 @@ app = FastAPI(
 )
 
 app.include_router(sessions.router)
+app.include_router(questions.router)
 
 
 @app.get("/health")
