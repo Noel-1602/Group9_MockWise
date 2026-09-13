@@ -4,3 +4,10 @@ sqlalchemy
 pydantic
 pytest
 httpx
+python-multipart
+pypdf
+python-docx
+pymupdf
+pdfplumber
+# dev / test only
+reportlab
