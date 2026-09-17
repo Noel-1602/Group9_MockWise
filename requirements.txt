@@ -11,3 +11,6 @@ pymupdf
 pdfplumber
 # dev / test only
 reportlab
+# optional: LLM backends for structure_resume() – uncomment to use
+# ollama    # required for backend="ollama" (needs a running local Ollama daemon)
+# groq      # required for backend="groq"   (needs GROQ_API_KEY env var)

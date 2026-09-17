@@ -164,3 +164,184 @@ def test_complete_session_database_error_on_commit(client):
         response = client.post(f"/sessions/{session_id}/complete")
         assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
         assert response.json()["detail"] == "Failed to update session due to a database error."
+
+
+# =============================================================================
+# Resume Upload & Parsing Endpoint Tests (POST /sessions/{session_id}/resume)
+# =============================================================================
+
+def test_upload_resume_success_txt(client):
+    """POST /sessions/{session_id}/resume successfully processes a text resume."""
+    db = SessionLocal()
+    session = InterviewSession()
+    db.add(session)
+    db.commit()
+    session_id = session.id
+    db.close()
+
+    resume_text = (
+        "Sarah Connor\n"
+        "sarah@skynet.resistance\n"
+        "Skills:\n"
+        "Tactics, Python, Security\n"
+        "Experience:\n"
+        "Leader at Resistance\n"
+        "- Directed tactical operations\n"
+    )
+
+    files = {"file": ("sarah_resume.txt", resume_text.encode("utf-8"), "text/plain")}
+    response = client.post(f"/sessions/{session_id}/resume", files=files)
+
+    assert response.status_code == status.HTTP_201_CREATED
+    data = response.json()
+    assert data["session_id"] == session_id
+    assert "id" in data
+    assert "Tactics" in data["skills_json"]
+    assert "Sarah Connor" in data["raw_text"]
+
+    # Verify session fields updated
+    db = SessionLocal()
+    updated_session = db.query(InterviewSession).filter_by(id=session_id).first()
+    assert updated_session.resume_filename == "sarah_resume.txt"
+    assert updated_session.candidate_name == "Sarah Connor"
+    assert updated_session.resume is not None
+    db.close()
+
+    # Verify GET /sessions/{session_id} returns nested resume
+    get_res = client.get(f"/sessions/{session_id}")
+    assert get_res.status_code == status.HTTP_200_OK
+    assert get_res.json()["resume"]["id"] == data["id"]
+
+
+def test_upload_resume_success_docx(client):
+    """POST /sessions/{session_id}/resume successfully processes a DOCX resume."""
+    import io
+    import docx
+
+    doc = docx.Document()
+    doc.add_paragraph("John Doe")
+    doc.add_paragraph("john@example.com")
+    doc.add_paragraph("Skills:\nPython, Machine Learning")
+    buf = io.BytesIO()
+    doc.save(buf)
+
+    db = SessionLocal()
+    session = InterviewSession(candidate_name="Existing Candidate")
+    db.add(session)
+    db.commit()
+    session_id = session.id
+    db.close()
+
+    files = {
+        "file": (
+            "john.docx",
+            buf.getvalue(),
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+    }
+    response = client.post(f"/sessions/{session_id}/resume", files=files)
+
+    assert response.status_code == status.HTTP_201_CREATED
+    data = response.json()
+    assert data["session_id"] == session_id
+    assert "Python" in data["skills_json"]
+
+    # Candidate name should not be overwritten if already set
+    db = SessionLocal()
+    updated_session = db.query(InterviewSession).filter_by(id=session_id).first()
+    assert updated_session.candidate_name == "Existing Candidate"
+    assert updated_session.resume_filename == "john.docx"
+    db.close()
+
+
+def test_upload_resume_session_not_found(client):
+    """POST /sessions/{session_id}/resume returns 404 for non-existent session."""
+    files = {"file": ("test.txt", b"Some resume content", "text/plain")}
+    response = client.post("/sessions/unknown-session-id/resume", files=files)
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert "not found" in response.json()["detail"].lower()
+
+
+def test_upload_resume_empty_file(client):
+    """POST /sessions/{session_id}/resume returns 400 when file is empty."""
+    db = SessionLocal()
+    session = InterviewSession()
+    db.add(session)
+    db.commit()
+    session_id = session.id
+    db.close()
+
+    files = {"file": ("empty.txt", b"", "text/plain")}
+    response = client.post(f"/sessions/{session_id}/resume", files=files)
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "empty" in response.json()["detail"].lower()
+
+
+def test_upload_resume_unsupported_type(client):
+    """POST /sessions/{session_id}/resume returns 400 when file type is unsupported."""
+    db = SessionLocal()
+    session = InterviewSession()
+    db.add(session)
+    db.commit()
+    session_id = session.id
+    db.close()
+
+    files = {"file": ("malware.exe", b"binarycontent", "application/octet-stream")}
+    response = client.post(f"/sessions/{session_id}/resume", files=files)
+    assert response.status_code == status.HTTP_400_BAD_REQUEST
+    assert "unsupported file format" in response.json()["detail"].lower()
+
+
+def test_upload_resume_updates_existing_resume(client):
+    """POST /sessions/{session_id}/resume replaces/updates existing 1:1 resume."""
+    db = SessionLocal()
+    session = InterviewSession()
+    db.add(session)
+    db.commit()
+    session_id = session.id
+    db.close()
+
+    # First upload
+    res1 = client.post(
+        f"/sessions/{session_id}/resume",
+        files={"file": ("v1.txt", b"Version 1 resume\nSkills:\nPython", "text/plain")},
+    )
+    assert res1.status_code == status.HTTP_201_CREATED
+    first_id = res1.json()["id"]
+
+    # Second upload for same session
+    res2 = client.post(
+        f"/sessions/{session_id}/resume",
+        files={"file": ("v2.txt", b"Version 2 resume\nSkills:\nGo, Rust", "text/plain")},
+    )
+    assert res2.status_code == status.HTTP_201_CREATED
+    second_data = res2.json()
+
+    # Id should be preserved as the existing 1:1 record is updated
+    assert second_data["id"] == first_id
+    assert "Rust" in second_data["skills_json"]
+    assert "Version 2 resume" in second_data["raw_text"]
+
+    # Ensure only 1 Resume record exists in DB for this session
+    db = SessionLocal()
+    resumes = db.query(Resume).filter_by(session_id=session_id).all()
+    assert len(resumes) == 1
+    db.close()
+
+
+def test_upload_resume_database_error(client):
+    """POST /sessions/{session_id}/resume returns 500 when database save fails."""
+    db = SessionLocal()
+    session = InterviewSession()
+    db.add(session)
+    db.commit()
+    session_id = session.id
+    db.close()
+
+    with patch("app.routers.sessions.Session.commit", side_effect=SQLAlchemyError("DB save failed")):
+        response = client.post(
+            f"/sessions/{session_id}/resume",
+            files={"file": ("test.txt", b"Some content\nSkills:\nPython", "text/plain")},
+        )
+        assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+        assert response.json()["detail"] == "Failed to save resume due to a database error."
