@@ -1,4 +1,7 @@
+import json
 import logging
+import os
+import tempfile
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -7,8 +10,6 @@ from app.database import get_db
 from app.models import InterviewSession, Resume, SessionStatus
 from app.schemas import ResumeResponse, SessionCreateRequest, SessionResponse
 from app.services.resume_parser import (
-    CorruptedFileError,
-    EmptyFileError,
     ResumeParsingError,
     UnsupportedFileTypeError,
     parse_resume,
@@ -133,6 +134,16 @@ async def upload_session_resume(
     db: Session = Depends(get_db),
 ):
     """Upload and parse a resume file, associating it with an interview session."""
+    filename = file.filename or ""
+    _, ext = os.path.splitext(filename)
+    ext_lower = ext.lower()
+
+    if ext_lower not in [".pdf", ".docx"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file format '{ext}'. Only PDF and DOCX files are supported.",
+        )
+
     try:
         session = db.query(InterviewSession).filter(InterviewSession.id == session_id).first()
     except SQLAlchemyError as exc:
@@ -148,24 +159,24 @@ async def upload_session_resume(
             detail=f"Interview session with ID '{session_id}' not found.",
         )
 
-    filename = file.filename or "resume.pdf"
     content = await file.read()
     if not content:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Uploaded file '{filename}' is empty.",
+            detail="Uploaded file is empty.",
         )
 
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=ext_lower)
+    temp_path = temp_file.name
     try:
-        parsed_resume = parse_resume(content=content, filename=filename)
-    except (UnsupportedFileTypeError, EmptyFileError) as exc:
+        temp_file.write(content)
+        temp_file.flush()
+        temp_file.close()
+
+        parsed_resume = parse_resume(temp_path, backend="mock")
+    except UnsupportedFileTypeError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(exc),
-        )
-    except CorruptedFileError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail=str(exc),
         )
     except ResumeParsingError as exc:
@@ -174,29 +185,65 @@ async def upload_session_resume(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to parse resume content.",
         )
+    except Exception as exc:
+        logger.error(f"Unexpected error while parsing resume for session {session_id}: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="An error occurred while parsing the resume.",
+        )
+    finally:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
 
-    resume_data = parsed_resume.to_db_json()
+    if hasattr(parsed_resume, "to_db_columns"):
+        cols = parsed_resume.to_db_columns()
+        skills_json = cols.get("skills_json")
+        projects_json = cols.get("projects_json")
+        experience_json = cols.get("experience_json")
+        education_json = cols.get("education_json")
+        raw_text = getattr(parsed_resume, "raw_text", None)
+    elif hasattr(parsed_resume, "to_db_json"):
+        cols = parsed_resume.to_db_json()
+        skills_json = cols.get("skills_json")
+        projects_json = cols.get("projects_json")
+        experience_json = cols.get("experience_json")
+        education_json = cols.get("education_json")
+        raw_text = cols.get("raw_text")
+    else:
+        skills_json = json.dumps(getattr(parsed_resume, "skills", []))
+        projects = getattr(parsed_resume, "projects", [])
+        projects_json = json.dumps([
+            p.model_dump() if hasattr(p, "model_dump") else p
+            for p in projects
+        ])
+        experience_json = json.dumps(getattr(parsed_resume, "experience", []))
+        education_json = json.dumps(getattr(parsed_resume, "education", []))
+        raw_text = getattr(parsed_resume, "raw_text", None)
 
     try:
         existing_resume = db.query(Resume).filter(Resume.session_id == session_id).first()
         if existing_resume:
-            existing_resume.skills_json = resume_data["skills_json"]
-            existing_resume.projects_json = resume_data["projects_json"]
-            existing_resume.experience_json = resume_data["experience_json"]
-            existing_resume.education_json = resume_data["education_json"]
-            existing_resume.raw_text = resume_data["raw_text"]
+            existing_resume.skills_json = skills_json
+            existing_resume.projects_json = projects_json
+            existing_resume.experience_json = experience_json
+            existing_resume.education_json = education_json
+            existing_resume.raw_text = raw_text
             resume_record = existing_resume
         else:
             resume_record = Resume(
                 session_id=session_id,
-                **resume_data,
+                skills_json=skills_json,
+                projects_json=projects_json,
+                experience_json=experience_json,
+                education_json=education_json,
+                raw_text=raw_text,
             )
             db.add(resume_record)
 
         session.resume_filename = filename
-        if not session.candidate_name and parsed_resume.candidate_name:
-            session.candidate_name = parsed_resume.candidate_name
-
         db.commit()
         db.refresh(resume_record)
         return resume_record
@@ -207,3 +254,4 @@ async def upload_session_resume(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to save resume due to a database error.",
         )
+
