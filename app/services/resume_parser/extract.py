@@ -114,7 +114,7 @@ def extract_text(content: bytes, filename: str) -> str:
 # ---------------------------------------------------------------------------
 
 def extract_text_from_pdf(file_path: str) -> str:
-    """Extract raw text from a PDF file using PyMuPDF (fitz).
+    """Extract raw text from a PDF file using PyMuPDF (pymupdf).
 
     No cleaning or post-processing is applied; that is handled downstream.
     If PyMuPDF returns empty or very short text the raw result is returned
@@ -126,11 +126,11 @@ def extract_text_from_pdf(file_path: str) -> str:
     Returns:
         Raw text concatenated from every page, separated by newlines.
     """
-    import fitz  # PyMuPDF – imported locally to keep the module importable
-                 # even when the optional dependency is absent.
+    import pymupdf  # PyMuPDF – imported locally to keep the module importable
+                    # even when the optional dependency is absent.
 
     pages: list[str] = []
-    with fitz.open(file_path) as doc:
+    with pymupdf.open(file_path) as doc:
         for page in doc:
             pages.append(page.get_text())
     return "\n".join(pages)
