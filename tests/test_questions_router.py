@@ -228,3 +228,50 @@ def test_submit_answer_database_error(client):
         )
         assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
         assert response.json()["detail"] == "Failed to save answer due to a database error."
+
+
+def test_get_question_audio_flow(client):
+    """Create session, upload resume, fetch next question, and get its audio as WAV."""
+    db = SessionLocal()
+    session = InterviewSession(candidate_name="Grace")
+    db.add(session)
+    db.commit()
+    session_id = session.id
+    db.close()
+
+    # Upload resume to trigger generation
+    pdf_bytes = _make_sample_resume_pdf()
+    upload_res = client.post(
+        f"/sessions/{session_id}/resume",
+        files={"file": ("resume.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert upload_res.status_code == status.HTTP_201_CREATED
+
+    # Fetch next question
+    res_next = client.get(f"/sessions/{session_id}/questions/next")
+    assert res_next.status_code == status.HTTP_200_OK
+    question_data = res_next.json()
+    question_id = question_data["id"]
+
+    # Call GET /questions/{question_id}/audio
+    audio_res = client.get(f"/questions/{question_id}/audio")
+    assert audio_res.status_code == status.HTTP_200_OK
+    assert "audio/wav" in audio_res.headers.get("content-type", "")
+    assert audio_res.content.startswith(b"RIFF")
+    assert audio_res.content[8:12] == b"WAVE"
+
+
+def test_get_question_audio_not_found(client):
+    """GET /questions/{question_id}/audio returns 404 for nonexistent question ID."""
+    response = client.get("/questions/nonexistent-question-id/audio")
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert "not found" in response.json()["detail"].lower()
+
+
+def test_get_question_audio_database_error(client):
+    """GET /questions/{question_id}/audio returns 500 on database error."""
+    with patch("app.routers.questions.Session.query", side_effect=SQLAlchemyError("DB lookup fail")):
+        response = client.get("/questions/some-id/audio")
+        assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+        assert "database error" in response.json()["detail"].lower()
+

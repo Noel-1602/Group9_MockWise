@@ -2,7 +2,7 @@ import json
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -11,6 +11,7 @@ from app.models import Answer, InterviewSession, Question, Resume
 from app.schemas import AnswerResponse, AnswerSubmitRequest, QuestionResponse
 from app.services.question_generator import generate_questions
 from app.services.resume_parser.schema import ParsedResume, ResumeProject
+from app.services.tts import synthesize_speech
 
 logger = logging.getLogger(__name__)
 
@@ -184,3 +185,33 @@ def submit_answer(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to save answer due to a database error.",
         )
+
+
+@router.get(
+    "/questions/{question_id}/audio",
+    status_code=status.HTTP_200_OK,
+    summary="Fetch synthesized audio for a question",
+)
+def get_question_audio(
+    question_id: str,
+    db: Session = Depends(get_db),
+):
+    """Synthesize speech audio for the question text and return as WAV audio bytes."""
+    try:
+        question = db.query(Question).filter(Question.id == question_id).first()
+    except SQLAlchemyError as exc:
+        logger.error(f"Database error while checking question {question_id}: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve question due to a database error.",
+        )
+
+    if not question:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Question with ID '{question_id}' not found.",
+        )
+
+    audio_bytes = synthesize_speech(question.question_text, backend="mock")
+    return Response(content=audio_bytes, media_type="audio/wav")
+
