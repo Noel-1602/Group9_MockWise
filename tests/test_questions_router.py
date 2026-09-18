@@ -275,3 +275,111 @@ def test_get_question_audio_database_error(client):
         assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
         assert "database error" in response.json()["detail"].lower()
 
+
+def test_submit_audio_answer_success(client):
+    """POST /questions/{question_id}/answer/audio transcribes audio and stores answer."""
+    db = SessionLocal()
+    session = InterviewSession(candidate_name="Hannah")
+    db.add(session)
+    db.commit()
+    session_id = session.id
+    db.close()
+
+    # Upload resume to trigger generation
+    pdf_bytes = _make_sample_resume_pdf()
+    upload_res = client.post(
+        f"/sessions/{session_id}/resume",
+        files={"file": ("resume.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert upload_res.status_code == status.HTTP_201_CREATED
+
+    # Fetch next question
+    res_next = client.get(f"/sessions/{session_id}/questions/next")
+    assert res_next.status_code == status.HTTP_200_OK
+    question_data = res_next.json()
+    question_id = question_data["id"]
+
+    # Submit audio answer
+    audio_content = b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00"
+    submit_res = client.post(
+        f"/questions/{question_id}/answer/audio",
+        files={"file": ("recording.wav", audio_content, "audio/wav")},
+    )
+    assert submit_res.status_code == status.HTTP_201_CREATED
+    data = submit_res.json()
+    assert data["question_id"] == question_id
+    assert data["transcript_text"] == "This is a mock transcription of the candidate's answer."
+    assert data["score"] is None
+    assert data["feedback_text"] is None
+
+    # Check that session reflects the answer
+    res_session = client.get(f"/sessions/{session_id}")
+    assert res_session.status_code == status.HTTP_200_OK
+    session_json = res_session.json()
+    matching_q = [q for q in session_json["questions"] if q["id"] == question_id][0]
+    assert matching_q["answer"] is not None
+    assert matching_q["answer"]["transcript_text"] == "This is a mock transcription of the candidate's answer."
+
+
+def test_submit_audio_answer_duplicate_rejected(client):
+    """POST /questions/{question_id}/answer/audio rejects duplicate answer with 400."""
+    db = SessionLocal()
+    session = InterviewSession(candidate_name="Ian")
+    db.add(session)
+    db.commit()
+
+    question = Question(session_id=session.id, question_index=0, question_text="Question")
+    db.add(question)
+    db.commit()
+    question_id = question.id
+    db.close()
+
+    # First audio submission succeeds
+    audio_bytes = b"valid audio bytes"
+    res1 = client.post(
+        f"/questions/{question_id}/answer/audio",
+        files={"file": ("recording1.wav", audio_bytes, "audio/wav")},
+    )
+    assert res1.status_code == status.HTTP_201_CREATED
+
+    # Second audio submission fails with 400
+    res2 = client.post(
+        f"/questions/{question_id}/answer/audio",
+        files={"file": ("recording2.wav", audio_bytes, "audio/wav")},
+    )
+    assert res2.status_code == status.HTTP_400_BAD_REQUEST
+    assert "already been submitted" in res2.json()["detail"].lower()
+
+
+def test_submit_audio_answer_empty_audio_rejected(client):
+    """POST /questions/{question_id}/answer/audio returns 400 (not 500) when audio file is empty."""
+    db = SessionLocal()
+    session = InterviewSession(candidate_name="Jack")
+    db.add(session)
+    db.commit()
+
+    question = Question(session_id=session.id, question_index=0, question_text="Question")
+    db.add(question)
+    db.commit()
+    question_id = question.id
+    db.close()
+
+    # Upload empty file bytes
+    res = client.post(
+        f"/questions/{question_id}/answer/audio",
+        files={"file": ("empty.wav", b"", "audio/wav")},
+    )
+    assert res.status_code == status.HTTP_400_BAD_REQUEST
+    assert "empty" in res.json()["detail"].lower()
+
+
+def test_submit_audio_answer_question_not_found(client):
+    """POST /questions/{question_id}/answer/audio returns 404 for nonexistent question ID."""
+    res = client.post(
+        "/questions/nonexistent-id/answer/audio",
+        files={"file": ("recording.wav", b"audio data", "audio/wav")},
+    )
+    assert res.status_code == status.HTTP_404_NOT_FOUND
+    assert "not found" in res.json()["detail"].lower()
+
+

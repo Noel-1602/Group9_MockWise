@@ -2,7 +2,7 @@ import json
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -11,6 +11,7 @@ from app.models import Answer, InterviewSession, Question, Resume
 from app.schemas import AnswerResponse, AnswerSubmitRequest, QuestionResponse
 from app.services.question_generator import generate_questions
 from app.services.resume_parser.schema import ParsedResume, ResumeProject
+from app.services.stt import transcribe_audio
 from app.services.tts import synthesize_speech
 
 logger = logging.getLogger(__name__)
@@ -130,19 +131,8 @@ def get_next_unanswered_question(
     return next_q
 
 
-@router.post(
-    "/questions/{question_id}/answer",
-    response_model=AnswerResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Submit an answer for a question",
-)
-def submit_answer(
-    question_id: str,
-    payload: AnswerSubmitRequest,
-    db: Session = Depends(get_db),
-):
-    """Store submitted transcript for a question."""
-    # 1. Verify question exists
+def _get_question_or_404(question_id: str, db: Session) -> Question:
+    """Verify and retrieve question by ID, raising 404 if not found or 500 on DB error."""
     try:
         question = db.query(Question).filter(Question.id == question_id).first()
     except SQLAlchemyError as exc:
@@ -157,17 +147,43 @@ def submit_answer(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Question with ID '{question_id}' not found.",
         )
+    return question
 
-    # 2. Check if an answer already exists for this question (1:0..1 relationship)
+
+def _ensure_question_not_answered(question_id: str, db: Session) -> None:
+    """Verify question has not already been answered, raising 400 if it has or 500 on DB error."""
     try:
         existing_answer = db.query(Answer).filter(Answer.question_id == question_id).first()
-        if existing_answer:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"An answer has already been submitted for question ID '{question_id}'.",
-            )
+    except SQLAlchemyError as exc:
+        logger.error(f"Database error while checking existing answer for question {question_id}: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve question due to a database error.",
+        )
 
-        # Create new Answer
+    if existing_answer:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"An answer has already been submitted for question ID '{question_id}'.",
+        )
+
+
+@router.post(
+    "/questions/{question_id}/answer",
+    response_model=AnswerResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Submit an answer for a question",
+)
+def submit_answer(
+    question_id: str,
+    payload: AnswerSubmitRequest,
+    db: Session = Depends(get_db),
+):
+    """Store submitted transcript for a question."""
+    _get_question_or_404(question_id, db)
+    _ensure_question_not_answered(question_id, db)
+
+    try:
         answer = Answer(
             question_id=question_id,
             transcript_text=payload.transcript_text,
@@ -187,6 +203,51 @@ def submit_answer(
         )
 
 
+@router.post(
+    "/questions/{question_id}/answer/audio",
+    response_model=AnswerResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Submit an audio answer for a question",
+)
+async def submit_audio_answer(
+    question_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    """Transcribe uploaded audio file and store answer for a question."""
+    _get_question_or_404(question_id, db)
+    _ensure_question_not_answered(question_id, db)
+
+    audio_bytes = await file.read()
+
+    try:
+        transcript_text = transcribe_audio(audio_bytes, backend="mock")
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc) or "Uploaded audio file cannot be empty.",
+        )
+
+    try:
+        answer = Answer(
+            question_id=question_id,
+            transcript_text=transcript_text,
+            score=None,
+            feedback_text=None,
+        )
+        db.add(answer)
+        db.commit()
+        db.refresh(answer)
+        return answer
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.error(f"Database error while storing audio answer for question {question_id}: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save answer due to a database error.",
+        )
+
+
 @router.get(
     "/questions/{question_id}/audio",
     status_code=status.HTTP_200_OK,
@@ -197,21 +258,8 @@ def get_question_audio(
     db: Session = Depends(get_db),
 ):
     """Synthesize speech audio for the question text and return as WAV audio bytes."""
-    try:
-        question = db.query(Question).filter(Question.id == question_id).first()
-    except SQLAlchemyError as exc:
-        logger.error(f"Database error while checking question {question_id}: {exc}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve question due to a database error.",
-        )
-
-    if not question:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Question with ID '{question_id}' not found.",
-        )
-
+    question = _get_question_or_404(question_id, db)
     audio_bytes = synthesize_speech(question.question_text, backend="mock")
     return Response(content=audio_bytes, media_type="audio/wav")
+
 
