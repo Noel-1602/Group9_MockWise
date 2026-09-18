@@ -7,8 +7,9 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import InterviewSession, Resume, SessionStatus
+from app.models import Answer, InterviewSession, Question, Resume, SessionStatus
 from app.schemas import ResumeResponse, SessionCreateRequest, SessionResponse
+from app.services.evaluation import evaluate_answer
 from app.services.resume_parser import (
     ResumeParsingError,
     UnsupportedFileTypeError,
@@ -93,7 +94,7 @@ def complete_session(
     session_id: str,
     db: Session = Depends(get_db),
 ):
-    """Mark an existing interview session as completed."""
+    """Mark an existing interview session as completed and evaluate unscored answers."""
     try:
         session = db.query(InterviewSession).filter(InterviewSession.id == session_id).first()
     except SQLAlchemyError as exc:
@@ -111,6 +112,31 @@ def complete_session(
 
     try:
         session.status = SessionStatus.completed
+
+        answers_with_questions = (
+            db.query(Answer, Question)
+            .join(Question, Answer.question_id == Question.id)
+            .filter(Question.session_id == session_id)
+            .all()
+        )
+
+        for answer, question in answers_with_questions:
+            if answer.score is not None:
+                continue
+
+            transcript = answer.transcript_text or ""
+            if not transcript.strip():
+                continue
+
+            result = evaluate_answer(
+                question_text=question.question_text,
+                transcript_text=transcript,
+                backend="mock",
+            )
+            answer.score = result.overall_score
+            answer.feedback_text = result.feedback_text
+            answer.evaluation_json = result.model_dump_json()
+
         db.commit()
         db.refresh(session)
         return session

@@ -20,6 +20,7 @@ class AnswerSubmitRequest(BaseModel):
     transcript_text: Optional[str] = Field(default=None, description="Transcribed audio or text answer")
     score: Optional[float] = Field(default=None, description="Evaluation score (e.g. 0.0 - 10.0)")
     feedback_text: Optional[str] = Field(default=None, description="Evaluator feedback on the answer")
+    evaluation_json: Optional[str] = Field(default=None, description="Detailed JSON evaluation payload")
 
 
 # =============================================================================
@@ -49,6 +50,7 @@ class AnswerResponse(BaseModel):
     transcript_text: Optional[str] = None
     score: Optional[float] = None
     feedback_text: Optional[str] = None
+    evaluation_json: Optional[str] = None
     created_at: datetime
 
 
