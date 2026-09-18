@@ -72,6 +72,7 @@ def test_models_crud_and_relationships(db):
         transcript_text="Dependency injection allows separating creation of dependencies from usage.",
         score=8.5,
         feedback_text="Clear and concise explanation.",
+        evaluation_json='{"accuracy": 9, "clarity": 8}',
     )
     db.add(a1)
     db.commit()
@@ -81,6 +82,7 @@ def test_models_crud_and_relationships(db):
     assert len(session.questions) == 2
     assert session.questions[0].question_index == 1
     assert session.questions[0].answer.id == a1.id
+    assert session.questions[0].answer.evaluation_json == '{"accuracy": 9, "clarity": 8}'
     assert session.questions[1].answer is None
 
 

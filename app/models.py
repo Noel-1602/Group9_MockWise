@@ -115,6 +115,7 @@ class Answer(Base):
     transcript_text = Column(Text, nullable=True)
     score = Column(Float, nullable=True)
     feedback_text = Column(Text, nullable=True)
+    evaluation_json = Column(Text, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=get_utc_now)
 
     # Relationship back to Question
