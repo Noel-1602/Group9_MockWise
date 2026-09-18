@@ -1,12 +1,16 @@
+import json
 import logging
+from typing import List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.models import Answer, InterviewSession, Question
+from app.models import Answer, InterviewSession, Question, Resume
 from app.schemas import AnswerResponse, AnswerSubmitRequest, QuestionResponse
+from app.services.question_generator import generate_questions
+from app.services.resume_parser.schema import ParsedResume, ResumeProject
 
 logger = logging.getLogger(__name__)
 
@@ -15,22 +19,81 @@ router = APIRouter(
 )
 
 
-@router.post(
-    "/sessions/{session_id}/questions",
+def generate_and_save_questions_for_session(
+    session_id: str,
+    db: Session,
+    parsed_resume: Optional[ParsedResume] = None,
+) -> List[Question]:
+    """Generate and persist Question rows for an interview session if not already present.
+
+    Guards against double-triggering on retries by checking for existing Question rows first.
+    """
+    existing_questions = (
+        db.query(Question)
+        .filter(Question.session_id == session_id)
+        .order_by(Question.question_index.asc())
+        .all()
+    )
+    if existing_questions:
+        logger.info(f"Questions already exist for session {session_id}; skipping generation.")
+        return existing_questions
+
+    if parsed_resume is None or not isinstance(parsed_resume, ParsedResume):
+        resume_record = db.query(Resume).filter(Resume.session_id == session_id).first()
+        if resume_record:
+            skills = json.loads(resume_record.skills_json) if resume_record.skills_json else []
+            projects_data = json.loads(resume_record.projects_json) if resume_record.projects_json else []
+            projects = [
+                ResumeProject(**p) if isinstance(p, dict) else ResumeProject(title=str(p), description="")
+                for p in projects_data
+            ]
+            experience = json.loads(resume_record.experience_json) if resume_record.experience_json else []
+            education = json.loads(resume_record.education_json) if resume_record.education_json else []
+            parsed_resume = ParsedResume(
+                skills=skills,
+                projects=projects,
+                experience=experience,
+                education=education,
+            )
+        else:
+            parsed_resume = ParsedResume()
+
+    generated_questions = generate_questions(parsed_resume, backend="mock", count=None)
+
+    created_questions: List[Question] = []
+    for idx, gq in enumerate(generated_questions):
+        question = Question(
+            session_id=session_id,
+            question_index=idx,
+            question_text=gq.question_text,
+            question_type=gq.type,
+        )
+        db.add(question)
+        created_questions.append(question)
+
+    db.commit()
+    for q in created_questions:
+        db.refresh(q)
+
+    logger.info(f"Generated and saved {len(created_questions)} questions for session {session_id}.")
+    return created_questions
+
+
+@router.get(
+    "/sessions/{session_id}/questions/next",
     response_model=QuestionResponse,
-    status_code=status.HTTP_201_CREATED,
-    summary="Add next question to an interview session",
+    status_code=status.HTTP_200_OK,
+    summary="Fetch the next unanswered question for an interview session",
 )
-def add_next_question(
+def get_next_unanswered_question(
     session_id: str,
     db: Session = Depends(get_db),
 ):
-    """Generate and append the next question for an interview session."""
-    # 1. Verify that the session exists
+    """Retrieve the next unanswered question for the given session ordered by question_index."""
     try:
         session = db.query(InterviewSession).filter(InterviewSession.id == session_id).first()
     except SQLAlchemyError as exc:
-        logger.error(f"Database error while checking session {session_id}: {exc}", exc_info=True)
+        logger.error(f"Database error checking session {session_id}: {exc}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve session due to a database error.",
@@ -42,37 +105,28 @@ def add_next_question(
             detail=f"Interview session with ID '{session_id}' not found.",
         )
 
-    # 2. Determine the next question index (1-based)
     try:
-        max_index = (
-            db.query(func.max(Question.question_index))
-            .filter(Question.session_id == session_id)
-            .scalar()
+        next_q = (
+            db.query(Question)
+            .outerjoin(Answer, Question.id == Answer.question_id)
+            .filter(Question.session_id == session_id, Answer.id == None)
+            .order_by(Question.question_index.asc())
+            .first()
         )
-        next_index = (max_index or 0) + 1
-
-        # TODO: Plug in resume-based question generation service here.
-        # e.g., question_text, question_type = question_generator.generate_next_question(session, next_index)
-        placeholder_text = f"Placeholder interview question #{next_index}. Tell me about your background and relevant technical experience."
-        placeholder_type = "general" if next_index == 1 else "technical"
-
-        question = Question(
-            session_id=session_id,
-            question_index=next_index,
-            question_text=placeholder_text,
-            question_type=placeholder_type,
-        )
-        db.add(question)
-        db.commit()
-        db.refresh(question)
-        return question
     except SQLAlchemyError as exc:
-        db.rollback()
-        logger.error(f"Database error while adding question to session {session_id}: {exc}", exc_info=True)
+        logger.error(f"Database error fetching next question for session {session_id}: {exc}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create question due to a database error.",
+            detail="Failed to retrieve question due to a database error.",
         )
+
+    if not next_q:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No unanswered questions remaining for session '{session_id}'.",
+        )
+
+    return next_q
 
 
 @router.post(
@@ -113,7 +167,6 @@ def submit_answer(
             )
 
         # Create new Answer
-        # TODO: Plug in evaluation service here to calculate score & feedback_text
         answer = Answer(
             question_id=question_id,
             transcript_text=payload.transcript_text,

@@ -14,6 +14,7 @@ from app.services.resume_parser import (
     UnsupportedFileTypeError,
     parse_resume,
 )
+from app.services.resume_parser.schema import ParsedResume
 
 logger = logging.getLogger(__name__)
 
@@ -246,6 +247,15 @@ async def upload_session_resume(
         session.resume_filename = filename
         db.commit()
         db.refresh(resume_record)
+
+        # Trigger question generation for this session (guarded against duplicate batches)
+        from app.routers.questions import generate_and_save_questions_for_session
+        generate_and_save_questions_for_session(
+            session_id=session_id,
+            db=db,
+            parsed_resume=parsed_resume if isinstance(parsed_resume, ParsedResume) else None,
+        )
+
         return resume_record
     except SQLAlchemyError as exc:
         db.rollback()

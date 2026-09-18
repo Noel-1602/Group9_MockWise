@@ -7,6 +7,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.database import Base, get_db
+from app.models import Question
 from app.main import app
 
 # SQLite in-memory with StaticPool to share a single connection and in-memory state
@@ -109,15 +110,19 @@ def test_full_session_flow_and_duplicate_answer_rejection(client):
     session_data = create_res.json()
     session_id = session_data["id"]
 
-    # 2. Add a question
-    add_q_res = client.post(f"/sessions/{session_id}/questions")
-    assert add_q_res.status_code == status.HTTP_201_CREATED
-    q_data = add_q_res.json()
-    question_id = q_data["id"]
-    assert q_data["session_id"] == session_id
-    assert q_data["question_index"] == 1
-    assert "Placeholder" in q_data["question_text"]
-    assert q_data["answer"] is None
+    # 2. Populate a question for the session
+    db = TestingSessionLocal()
+    q = Question(
+        session_id=session_id,
+        question_index=0,
+        question_text="Tell me about your experience building backend microservices.",
+        question_type="general",
+    )
+    db.add(q)
+    db.commit()
+    db.refresh(q)
+    question_id = q.id
+    db.close()
 
     # 3. Submit an answer
     ans_payload = {

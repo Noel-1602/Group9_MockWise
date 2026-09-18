@@ -6,10 +6,10 @@ from app.services.resume_parser.schema import ParsedResume, ResumeProject
 
 
 @pytest.fixture
-def sample_parsed_resume() -> ParsedResume:
-    """Fixture providing a populated ParsedResume instance."""
+def well_populated_resume() -> ParsedResume:
+    """Fixture providing a well-populated ParsedResume instance."""
     return ParsedResume(
-        skills=["Python", "FastAPI", "PostgreSQL", "Docker"],
+        skills=["Python", "FastAPI", "PostgreSQL", "Docker", "Kubernetes", "Redis", "AWS"],
         projects=[
             ResumeProject(
                 title="MockWise",
@@ -19,63 +19,124 @@ def sample_parsed_resume() -> ParsedResume:
                 title="TaskMaster",
                 description="Distributed workflow orchestrator built with Celery and Redis.",
             ),
+            ResumeProject(
+                title="CloudMetrics",
+                description="Real-time telemetry and metrics aggregator.",
+            ),
         ],
         experience=[
             "Senior Software Engineer at Acme Corp (2022-2024)",
             "Software Developer at TechStart (2020-2022)",
+            "Junior Backend Developer at InnovateLabs (2018-2020)",
         ],
         education=[
-            "B.S. in Computer Science, State University, 2020",
+            "B.S. in Computer Science, State University, 2018",
         ],
     )
 
 
-def test_mock_backend_returns_valid_questions(sample_parsed_resume):
-    """Verify mock backend returns a non-empty list of valid GeneratedQuestion objects."""
-    questions = generate_questions(sample_parsed_resume, backend="mock")
-
-    assert isinstance(questions, list)
-    assert len(questions) > 0
-
-    for q in questions:
-        assert isinstance(q, GeneratedQuestion)
-        assert isinstance(q.question_text, str)
-        assert len(q.question_text.strip()) > 0
-        assert q.type in ("resume_specific", "general")
-
-    # Check that both resume_specific and general questions exist
-    types = {q.type for q in questions}
-    assert "resume_specific" in types
-    assert "general" in types
-
-    # Check grounding in resume data
-    question_texts = " ".join(q.question_text for q in questions)
-    assert sample_parsed_resume.skills[0] in question_texts
-    assert sample_parsed_resume.projects[0].title in question_texts
+@pytest.fixture
+def thin_resume() -> ParsedResume:
+    """Fixture providing a resume with only one skill and no other items."""
+    return ParsedResume(
+        skills=["Python"],
+        projects=[],
+        experience=[],
+        education=[],
+    )
 
 
-def test_mock_backend_default_parameter(sample_parsed_resume):
+@pytest.mark.parametrize("target_count,expected_specific,expected_general", [
+    (6, 4, 2),
+    (7, 5, 2),
+    (8, 6, 2),
+])
+def test_explicit_count_well_populated_resume(
+    well_populated_resume,
+    target_count,
+    expected_specific,
+    expected_general,
+):
+    """Verify explicit count produces exact question count with ~70/30 type split and unique texts."""
+    questions = generate_questions(well_populated_resume, backend="mock", count=target_count)
+
+    assert len(questions) == target_count
+
+    specific_count = sum(1 for q in questions if q.type == "resume_specific")
+    general_count = sum(1 for q in questions if q.type == "general")
+
+    assert specific_count == expected_specific
+    assert general_count == expected_general
+
+    # Ensure no duplicate question_text values
+    unique_texts = {q.question_text for q in questions}
+    assert len(unique_texts) == target_count
+
+
+def test_default_count_range_over_repeated_calls(well_populated_resume):
+    """Verify calling with count=None over repeated calls always returns a total in [6, 8]."""
+    for _ in range(50):
+        questions = generate_questions(well_populated_resume, backend="mock", count=None)
+        assert 6 <= len(questions) <= 8
+        for q in questions:
+            assert isinstance(q, GeneratedQuestion)
+            assert q.type in ("resume_specific", "general")
+            assert len(q.question_text.strip()) > 0
+
+        # No duplicates in any single call
+        assert len({q.question_text for q in questions}) == len(questions)
+
+
+def test_thin_resume_fills_shortfall_with_general(thin_resume):
+    """Verify a thin resume hits the requested count by filling the shortfall with general questions."""
+    count = 7
+    questions = generate_questions(thin_resume, backend="mock", count=count)
+
+    assert len(questions) == count
+
+    specific_questions = [q for q in questions if q.type == "resume_specific"]
+    general_questions = [q for q in questions if q.type == "general"]
+
+    # Only 1 skill available -> exactly 1 resume_specific question
+    assert len(specific_questions) == 1
+    assert "Python" in specific_questions[0].question_text
+    # Remaining 6 slots filled with general questions
+    assert len(general_questions) == 6
+
+    # Verify all question texts are distinct
+    assert len({q.question_text for q in questions}) == count
+
+
+def test_no_duplicate_question_text_across_categories(well_populated_resume):
+    """Verify no duplicate question texts are produced in a single call."""
+    for count in [6, 7, 8, 10]:
+        questions = generate_questions(well_populated_resume, backend="mock", count=count)
+        texts = [q.question_text for q in questions]
+        assert len(texts) == len(set(texts))
+
+
+def test_mock_backend_default_parameter(well_populated_resume):
     """Verify default backend parameter is 'mock'."""
-    questions = generate_questions(sample_parsed_resume)
+    questions = generate_questions(well_populated_resume)
     assert isinstance(questions, list)
-    assert len(questions) > 0
+    assert 6 <= len(questions) <= 8
 
 
 @pytest.mark.parametrize("backend", ["ollama", "groq"])
-def test_unimplemented_backends_raise_not_implemented(sample_parsed_resume, backend):
+def test_unimplemented_backends_raise_not_implemented(well_populated_resume, backend):
     """Verify calling with backend='ollama' or 'groq' raises NotImplementedError."""
     with pytest.raises(NotImplementedError):
-        generate_questions(sample_parsed_resume, backend=backend)
+        generate_questions(well_populated_resume, backend=backend)
 
 
-def test_unknown_backend_raises_value_error(sample_parsed_resume):
+def test_unknown_backend_raises_value_error(well_populated_resume):
     """Verify unknown backend raises ValueError."""
     with pytest.raises(ValueError):
-        generate_questions(sample_parsed_resume, backend="invalid_backend")  # type: ignore[arg-type]
+        generate_questions(well_populated_resume, backend="invalid_backend")  # type: ignore[arg-type]
 
 
 def test_mock_backend_handles_empty_resume():
-    """Verify mock backend doesn't crash when resume.skills and resume.projects are empty."""
+    """Verify mock backend handles empty resume by filling entirely with general questions."""
     empty_resume = ParsedResume(
         skills=[],
         projects=[],
@@ -83,13 +144,12 @@ def test_mock_backend_handles_empty_resume():
         education=[],
     )
 
-    questions = generate_questions(empty_resume, backend="mock")
+    questions = generate_questions(empty_resume, backend="mock", count=7)
 
-    assert isinstance(questions, list)
-    assert len(questions) > 0
-
+    assert len(questions) == 7
     for q in questions:
         assert isinstance(q, GeneratedQuestion)
-        assert isinstance(q.question_text, str)
-        assert len(q.question_text.strip()) > 0
         assert q.type == "general"
+        assert len(q.question_text.strip()) > 0
+
+    assert len({q.question_text for q in questions}) == 7
