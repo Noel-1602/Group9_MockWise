@@ -25,6 +25,29 @@ router = APIRouter(
 )
 
 
+def _populate_session_summary(session: InterviewSession) -> InterviewSession:
+    """Compute summary metrics from session's existing questions/answers relationships and attach to the session."""
+    questions = session.questions or []
+    total_questions = len(questions)
+    answered_questions = [q for q in questions if q.answer is not None]
+    answered_count = len(answered_questions)
+
+    scored_values = [
+        q.answer.score for q in answered_questions if q.answer.score is not None
+    ]
+    average_score = (sum(scored_values) / len(scored_values)) if scored_values else None
+
+    resume_specific_count = sum(1 for q in questions if q.question_type == "resume_specific")
+    general_count = sum(1 for q in questions if q.question_type == "general")
+
+    session.total_questions = total_questions
+    session.answered_count = answered_count
+    session.average_score = average_score
+    session.resume_specific_count = resume_specific_count
+    session.general_count = general_count
+    return session
+
+
 @router.post(
     "",
     response_model=SessionResponse,
@@ -45,7 +68,7 @@ def create_session(
         db.add(session)
         db.commit()
         db.refresh(session)
-        return session
+        return _populate_session_summary(session)
     except SQLAlchemyError as exc:
         db.rollback()
         logger.error(f"Database error while creating session: {exc}", exc_info=True)
@@ -81,7 +104,7 @@ def get_session(
             detail=f"Interview session with ID '{session_id}' not found.",
         )
 
-    return session
+    return _populate_session_summary(session)
 
 
 @router.post(
@@ -139,7 +162,7 @@ def complete_session(
 
         db.commit()
         db.refresh(session)
-        return session
+        return _populate_session_summary(session)
     except SQLAlchemyError as exc:
         db.rollback()
         logger.error(f"Database error while marking session {session_id} completed: {exc}", exc_info=True)

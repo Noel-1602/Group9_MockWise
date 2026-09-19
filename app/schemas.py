@@ -67,8 +67,17 @@ class QuestionResponse(BaseModel):
     answer: Optional[AnswerResponse] = None
 
 
+class SessionSummary(BaseModel):
+    """Schema representing computed summary metrics for an interview session."""
+    total_questions: int = Field(default=0, description="Total number of questions in the session")
+    answered_count: int = Field(default=0, description="Number of answered questions")
+    average_score: Optional[float] = Field(default=None, description="Average score across answered questions, or None")
+    resume_specific_count: int = Field(default=0, description="Number of resume-specific questions")
+    general_count: int = Field(default=0, description="Number of general questions")
+
+
 class SessionResponse(BaseModel):
-    """Schema representing an interview session with its resume and questions."""
+    """Schema representing an interview session with its resume, questions, and summary metrics."""
     model_config = ConfigDict(from_attributes=True)
 
     id: str
@@ -78,3 +87,8 @@ class SessionResponse(BaseModel):
     created_at: datetime
     resume: Optional[ResumeResponse] = None
     questions: List[QuestionResponse] = []
+    total_questions: int = 0
+    answered_count: int = 0
+    average_score: Optional[float] = None
+    resume_specific_count: int = 0
+    general_count: int = 0

@@ -10,6 +10,7 @@ from app.schemas import (
     ResumeResponse,
     SessionCreateRequest,
     SessionResponse,
+    SessionSummary,
 )
 
 
@@ -126,3 +127,30 @@ def test_orm_models_to_pydantic_schemas(db):
     assert session_dto.questions[0].id == q1_orm.id
     assert session_dto.questions[0].answer is not None
     assert session_dto.questions[0].answer.score == 9.5
+    assert session_dto.total_questions == 0
+    assert session_dto.answered_count == 0
+    assert session_dto.average_score is None
+
+
+def test_session_summary_schema_validation():
+    """Verify SessionSummary model defaults and custom fields."""
+    summary_default = SessionSummary()
+    assert summary_default.total_questions == 0
+    assert summary_default.answered_count == 0
+    assert summary_default.average_score is None
+    assert summary_default.resume_specific_count == 0
+    assert summary_default.general_count == 0
+
+    summary_custom = SessionSummary(
+        total_questions=5,
+        answered_count=2,
+        average_score=7.5,
+        resume_specific_count=3,
+        general_count=2,
+    )
+    assert summary_custom.total_questions == 5
+    assert summary_custom.answered_count == 2
+    assert summary_custom.average_score == 7.5
+    assert summary_custom.resume_specific_count == 3
+    assert summary_custom.general_count == 2
+

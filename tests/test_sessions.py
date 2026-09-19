@@ -303,3 +303,135 @@ def test_complete_session_evaluates_unscored_answers(client):
     assert q1_second["answer"]["evaluation_json"] == q1_eval_first
     assert q2_second["answer"] is None
 
+
+def test_session_summary_computation(client):
+    """Verify computed session summary metrics:
+
+    1. A session with questions but no answers returns average_score: None and answered_count: 0.
+    2. A session with generated question mix computes correct resume_specific_count and general_count.
+    3. A session with some answered and scored questions returns the exact average_score (e.g. 4.0 and 6.0 average to 5.0).
+    """
+    # 1. Create a session and upload resume to generate questions
+    create_res = client.post(
+        "/sessions",
+        json={"candidate_name": "John Summary", "resume_filename": "john_cv.pdf"},
+    )
+    assert create_res.status_code == status.HTTP_201_CREATED
+    session_id = create_res.json()["id"]
+
+    pdf_bytes = _make_sample_pdf_bytes()
+    upload_res = client.post(
+        f"/sessions/{session_id}/resume",
+        files={"file": ("john_cv.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert upload_res.status_code == status.HTTP_201_CREATED
+
+    # 2. Fetch session when no questions have been answered yet
+    get_res = client.get(f"/sessions/{session_id}")
+    assert get_res.status_code == status.HTTP_200_OK
+    session_data = get_res.json()
+
+    questions = session_data["questions"]
+    total_q = len(questions)
+    assert total_q >= 3
+
+    expected_resume_specific = sum(1 for q in questions if q["question_type"] == "resume_specific")
+    expected_general = sum(1 for q in questions if q["question_type"] == "general")
+
+    assert session_data["total_questions"] == total_q
+    assert session_data["answered_count"] == 0
+    assert session_data["average_score"] is None
+    assert session_data["resume_specific_count"] == expected_resume_specific
+    assert session_data["general_count"] == expected_general
+    assert expected_resume_specific + expected_general == total_q
+
+    # 3. Answer two questions with explicit scores 4.0 and 6.0
+    q0_id = questions[0]["id"]
+    q1_id = questions[1]["id"]
+
+    ans0_res = client.post(
+        f"/questions/{q0_id}/answer",
+        json={"transcript_text": "Answer to first question", "score": 4.0},
+    )
+    assert ans0_res.status_code == status.HTTP_201_CREATED
+
+    ans1_res = client.post(
+        f"/questions/{q1_id}/answer",
+        json={"transcript_text": "Answer to second question", "score": 6.0},
+    )
+    assert ans1_res.status_code == status.HTTP_201_CREATED
+
+    # 4. Fetch session again and verify the computed average score and counts
+    get_res_scored = client.get(f"/sessions/{session_id}")
+    assert get_res_scored.status_code == status.HTTP_200_OK
+    scored_session_data = get_res_scored.json()
+
+    assert scored_session_data["total_questions"] == total_q
+    assert scored_session_data["answered_count"] == 2
+    # Verify exact arithmetic: (4.0 + 6.0) / 2 == 5.0
+    assert scored_session_data["average_score"] == 5.0
+    assert scored_session_data["resume_specific_count"] == expected_resume_specific
+    assert scored_session_data["general_count"] == expected_general
+
+
+def test_session_summary_manual_question_mix(client):
+    """Verify session summary metrics on manually configured question types and scores."""
+    create_res = client.post(
+        "/sessions",
+        json={"candidate_name": "Test Candidate"},
+    )
+    assert create_res.status_code == status.HTTP_201_CREATED
+    session_id = create_res.json()["id"]
+
+    # Add 3 questions: 2 resume_specific, 1 general
+    db = TestingSessionLocal()
+    q1 = Question(
+        session_id=session_id,
+        question_index=0,
+        question_text="Resume Q1",
+        question_type="resume_specific",
+    )
+    q2 = Question(
+        session_id=session_id,
+        question_index=1,
+        question_text="Resume Q2",
+        question_type="resume_specific",
+    )
+    q3 = Question(
+        session_id=session_id,
+        question_index=2,
+        question_text="General Q1",
+        question_type="general",
+    )
+    db.add_all([q1, q2, q3])
+    db.commit()
+    db.refresh(q1)
+    db.refresh(q2)
+    db.refresh(q3)
+    q1_id, q2_id, q3_id = q1.id, q2.id, q3.id
+    db.close()
+
+    # Verify initial summary with 0 answered
+    res = client.get(f"/sessions/{session_id}")
+    assert res.status_code == status.HTTP_200_OK
+    data = res.json()
+    assert data["total_questions"] == 3
+    assert data["answered_count"] == 0
+    assert data["average_score"] is None
+    assert data["resume_specific_count"] == 2
+    assert data["general_count"] == 1
+
+    # Answer q1 with 4.0 and q2 with 6.0
+    client.post(f"/questions/{q1_id}/answer", json={"transcript_text": "Ans 1", "score": 4.0})
+    client.post(f"/questions/{q2_id}/answer", json={"transcript_text": "Ans 2", "score": 6.0})
+
+    # Verify updated summary
+    res = client.get(f"/sessions/{session_id}")
+    assert res.status_code == status.HTTP_200_OK
+    data = res.json()
+    assert data["total_questions"] == 3
+    assert data["answered_count"] == 2
+    assert data["average_score"] == 5.0
+    assert data["resume_specific_count"] == 2
+    assert data["general_count"] == 1
+
