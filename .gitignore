@@ -29,6 +29,17 @@ backend/storage/uploads/*
 backend/storage/mockwise.db
 backend/tmp/
 
+# Node & Frontend
+node_modules/
+frontend/node_modules/
+.next/
+frontend/.next/
+frontend/out/
+frontend/build/
+*.tsbuildinfo
+next-env.d.ts
+
 # IDE / Editor Folders
 .vscode/
 .idea/
+
