@@ -51,6 +51,7 @@ class AnswerResponse(BaseModel):
     score: Optional[float] = None
     feedback_text: Optional[str] = None
     evaluation_json: Optional[str] = None
+    skipped: bool = False
     created_at: datetime
 
 
@@ -71,6 +72,7 @@ class SessionSummary(BaseModel):
     """Schema representing computed summary metrics for an interview session."""
     total_questions: int = Field(default=0, description="Total number of questions in the session")
     answered_count: int = Field(default=0, description="Number of answered questions")
+    skipped_count: int = Field(default=0, description="Number of skipped questions")
     average_score: Optional[float] = Field(default=None, description="Average score across answered questions, or None")
     resume_specific_count: int = Field(default=0, description="Number of resume-specific questions")
     general_count: int = Field(default=0, description="Number of general questions")
@@ -89,6 +91,8 @@ class SessionResponse(BaseModel):
     questions: List[QuestionResponse] = []
     total_questions: int = 0
     answered_count: int = 0
+    skipped_count: int = 0
     average_score: Optional[float] = None
     resume_specific_count: int = 0
     general_count: int = 0
+

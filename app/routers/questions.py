@@ -151,7 +151,7 @@ def _get_question_or_404(question_id: str, db: Session) -> Question:
 
 
 def _ensure_question_not_answered(question_id: str, db: Session) -> None:
-    """Verify question has not already been answered, raising 400 if it has or 500 on DB error."""
+    """Verify question has not already been answered or skipped, raising 400 if it has or 500 on DB error."""
     try:
         existing_answer = db.query(Answer).filter(Answer.question_id == question_id).first()
     except SQLAlchemyError as exc:
@@ -162,9 +162,46 @@ def _ensure_question_not_answered(question_id: str, db: Session) -> None:
         )
 
     if existing_answer:
+        action = "skipped" if existing_answer.skipped else "submitted"
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"An answer has already been submitted for question ID '{question_id}'.",
+            detail=f"An answer has already been {action} for question ID '{question_id}'.",
+        )
+
+
+@router.post(
+    "/questions/{question_id}/skip",
+    response_model=AnswerResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Skip an interview question",
+)
+def skip_question(
+    question_id: str,
+    db: Session = Depends(get_db),
+):
+    """Mark a question as skipped by creating an Answer row with skipped=True."""
+    _get_question_or_404(question_id, db)
+    _ensure_question_not_answered(question_id, db)
+
+    try:
+        answer = Answer(
+            question_id=question_id,
+            transcript_text=None,
+            score=None,
+            feedback_text=None,
+            evaluation_json=None,
+            skipped=True,
+        )
+        db.add(answer)
+        db.commit()
+        db.refresh(answer)
+        return answer
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.error(f"Database error while skipping question {question_id}: {exc}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to skip question due to a database error.",
         )
 
 
@@ -189,6 +226,7 @@ def submit_answer(
             transcript_text=payload.transcript_text,
             score=payload.score if payload.score is not None else None,
             feedback_text=payload.feedback_text if payload.feedback_text is not None else None,
+            skipped=False,
         )
         db.add(answer)
         db.commit()
@@ -201,6 +239,7 @@ def submit_answer(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to save answer due to a database error.",
         )
+
 
 
 @router.post(

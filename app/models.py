@@ -1,7 +1,7 @@
 import enum
 import uuid
 from datetime import datetime, timezone
-from sqlalchemy import Column, DateTime, Enum, Float, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, Enum, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.database import Base
@@ -116,7 +116,9 @@ class Answer(Base):
     score = Column(Float, nullable=True)
     feedback_text = Column(Text, nullable=True)
     evaluation_json = Column(Text, nullable=True)
+    skipped = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime(timezone=True), nullable=False, default=get_utc_now)
 
     # Relationship back to Question
     question = relationship("Question", back_populates="answer")
+

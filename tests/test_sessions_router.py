@@ -374,3 +374,80 @@ def test_upload_resume_database_error(client):
         assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
         assert response.json()["detail"] == "Failed to save resume due to a database error."
 
+
+def test_complete_session_ignores_skipped_answers(client):
+    """POST /sessions/{session_id}/complete leaves skipped answers unscored without error."""
+    db = SessionLocal()
+    session = InterviewSession(candidate_name="Skipper")
+    db.add(session)
+    db.commit()
+
+    q1 = Question(session_id=session.id, question_index=0, question_text="Q1 text")
+    q2 = Question(session_id=session.id, question_index=1, question_text="Q2 text")
+    db.add_all([q1, q2])
+    db.commit()
+
+    # q1 is answered with transcript, unscored
+    a1 = Answer(question_id=q1.id, transcript_text="Detailed answer to question 1", skipped=False)
+    # q2 is skipped
+    a2 = Answer(question_id=q2.id, transcript_text=None, score=None, skipped=True)
+    db.add_all([a1, a2])
+    db.commit()
+    session_id = session.id
+    q1_id, q2_id = q1.id, q2.id
+    db.close()
+
+    res = client.post(f"/sessions/{session_id}/complete")
+    assert res.status_code == status.HTTP_200_OK
+    data = res.json()
+    assert data["status"] == "completed"
+    assert data["answered_count"] == 1
+    assert data["skipped_count"] == 1
+    assert data["total_questions"] == 2
+
+    # Check question answers
+    q_map = {q["id"]: q for q in data["questions"]}
+    assert q_map[q1_id]["answer"]["score"] is not None
+    assert q_map[q1_id]["answer"]["skipped"] is False
+    assert q_map[q2_id]["answer"]["score"] is None
+    assert q_map[q2_id]["answer"]["skipped"] is True
+
+
+
+def test_session_summary_mixed_answered_skipped_untouched(client):
+    """GET /sessions/{session_id} computes correct answered_count, skipped_count, and average_score."""
+    db = SessionLocal()
+    session = InterviewSession(candidate_name="Mixed Candidate")
+    db.add(session)
+    db.commit()
+
+    q0 = Question(session_id=session.id, question_index=0, question_text="Q0", question_type="resume_specific")
+    q1 = Question(session_id=session.id, question_index=1, question_text="Q1", question_type="general")
+    q2 = Question(session_id=session.id, question_index=2, question_text="Q2", question_type="general")
+    q3 = Question(session_id=session.id, question_index=3, question_text="Q3", question_type="general")
+    db.add_all([q0, q1, q2, q3])
+    db.commit()
+
+    # q0 answered with score 8.0
+    a0 = Answer(question_id=q0.id, transcript_text="Ans 0", score=8.0, skipped=False)
+    # q1 answered with score 6.0
+    a1 = Answer(question_id=q1.id, transcript_text="Ans 1", score=6.0, skipped=False)
+    # q2 skipped
+    a2 = Answer(question_id=q2.id, transcript_text=None, score=None, skipped=True)
+    # q3 untouched (no Answer row)
+    db.add_all([a0, a1, a2])
+    db.commit()
+    session_id = session.id
+    db.close()
+
+    res = client.get(f"/sessions/{session_id}")
+    assert res.status_code == status.HTTP_200_OK
+    data = res.json()
+    assert data["total_questions"] == 4
+    assert data["answered_count"] == 2
+    assert data["skipped_count"] == 1
+    assert data["average_score"] == 7.0  # (8.0 + 6.0) / 2
+    assert data["resume_specific_count"] == 1
+    assert data["general_count"] == 3
+
+

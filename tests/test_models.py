@@ -151,3 +151,31 @@ def test_cascade_delete(db):
     assert db.query(Resume).filter_by(id=resume.id).first() is None
     assert db.query(Question).filter_by(id=q1.id).first() is None
     assert db.query(Answer).filter_by(id=a1.id).first() is None
+
+
+def test_answer_skipped_field_and_nullable_transcript(db):
+    """Verify Answer.skipped defaults to False, can be set to True with transcript_text=None."""
+    session = InterviewSession(candidate_name="Skip Model Test")
+    db.add(session)
+    db.commit()
+
+    q1 = Question(session_id=session.id, question_index=0, question_text="Q1")
+    q2 = Question(session_id=session.id, question_index=1, question_text="Q2")
+    db.add_all([q1, q2])
+    db.commit()
+
+    # Normal answer defaults skipped=False
+    a1 = Answer(question_id=q1.id, transcript_text="Some text")
+    # Skipped answer has skipped=True and transcript_text=None
+    a2 = Answer(question_id=q2.id, transcript_text=None, skipped=True)
+    db.add_all([a1, a2])
+    db.commit()
+
+    db.refresh(a1)
+    db.refresh(a2)
+    assert a1.skipped is False
+    assert a1.transcript_text == "Some text"
+    assert a2.skipped is True
+    assert a2.transcript_text is None
+    assert a2.score is None
+

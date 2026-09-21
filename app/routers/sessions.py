@@ -29,8 +29,14 @@ def _populate_session_summary(session: InterviewSession) -> InterviewSession:
     """Compute summary metrics from session's existing questions/answers relationships and attach to the session."""
     questions = session.questions or []
     total_questions = len(questions)
-    answered_questions = [q for q in questions if q.answer is not None]
+    answered_questions = [
+        q for q in questions if q.answer is not None and not q.answer.skipped
+    ]
+    skipped_questions = [
+        q for q in questions if q.answer is not None and q.answer.skipped
+    ]
     answered_count = len(answered_questions)
+    skipped_count = len(skipped_questions)
 
     scored_values = [
         q.answer.score for q in answered_questions if q.answer.score is not None
@@ -42,6 +48,7 @@ def _populate_session_summary(session: InterviewSession) -> InterviewSession:
 
     session.total_questions = total_questions
     session.answered_count = answered_count
+    session.skipped_count = skipped_count
     session.average_score = average_score
     session.resume_specific_count = resume_specific_count
     session.general_count = general_count
@@ -144,6 +151,8 @@ def complete_session(
         )
 
         for answer, question in answers_with_questions:
+            if answer.skipped:
+                continue
             if answer.score is not None:
                 continue
 
@@ -170,6 +179,7 @@ def complete_session(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update session due to a database error.",
         )
+
 
 
 @router.post(

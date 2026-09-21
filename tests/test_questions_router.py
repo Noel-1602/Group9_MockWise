@@ -383,3 +383,181 @@ def test_submit_audio_answer_question_not_found(client):
     assert "not found" in res.json()["detail"].lower()
 
 
+# =============================================================================
+# Skip Question Tests
+# =============================================================================
+
+def test_skip_question_success(client):
+    """POST /questions/{question_id}/skip creates a skipped answer and returns 201."""
+    db = SessionLocal()
+    session = InterviewSession(candidate_name="Skip Candidate")
+    db.add(session)
+    db.commit()
+
+    question = Question(session_id=session.id, question_index=0, question_text="What is DI?")
+    db.add(question)
+    db.commit()
+    question_id = question.id
+    db.close()
+
+    res = client.post(f"/questions/{question_id}/skip")
+    assert res.status_code == status.HTTP_201_CREATED
+    data = res.json()
+    assert data["question_id"] == question_id
+    assert data["skipped"] is True
+    assert data["transcript_text"] is None
+    assert data["score"] is None
+    assert data["feedback_text"] is None
+    assert data["evaluation_json"] is None
+
+
+def test_skip_question_not_found(client):
+    """POST /questions/{question_id}/skip returns 404 for non-existent question."""
+    res = client.post("/questions/non-existent-id/skip")
+    assert res.status_code == status.HTTP_404_NOT_FOUND
+    assert "not found" in res.json()["detail"].lower()
+
+
+def test_skip_question_already_answered_rejected(client):
+    """POST /questions/{question_id}/skip returns 400 if question is already answered."""
+    db = SessionLocal()
+    session = InterviewSession(candidate_name="Already Answered")
+    db.add(session)
+    db.commit()
+
+    question = Question(session_id=session.id, question_index=0, question_text="Q1")
+    db.add(question)
+    db.commit()
+    question_id = question.id
+    db.close()
+
+    # Answer question first
+    client.post(f"/questions/{question_id}/answer", json={"transcript_text": "Answer"})
+
+    # Attempt to skip
+    res = client.post(f"/questions/{question_id}/skip")
+    assert res.status_code == status.HTTP_400_BAD_REQUEST
+    assert "already been" in res.json()["detail"].lower()
+
+
+def test_skip_question_already_skipped_rejected(client):
+    """POST /questions/{question_id}/skip returns 400 if question is already skipped."""
+    db = SessionLocal()
+    session = InterviewSession(candidate_name="Already Skipped")
+    db.add(session)
+    db.commit()
+
+    question = Question(session_id=session.id, question_index=0, question_text="Q1")
+    db.add(question)
+    db.commit()
+    question_id = question.id
+    db.close()
+
+    # Skip question first
+    res1 = client.post(f"/questions/{question_id}/skip")
+    assert res1.status_code == status.HTTP_201_CREATED
+
+    # Attempt to skip again
+    res2 = client.post(f"/questions/{question_id}/skip")
+    assert res2.status_code == status.HTTP_400_BAD_REQUEST
+    assert "already been skipped" in res2.json()["detail"].lower()
+
+
+def test_submit_answer_already_skipped_rejected(client):
+    """POST /questions/{question_id}/answer returns 400 if question was skipped."""
+    db = SessionLocal()
+    session = InterviewSession(candidate_name="Skip Then Answer")
+    db.add(session)
+    db.commit()
+
+    question = Question(session_id=session.id, question_index=0, question_text="Q1")
+    db.add(question)
+    db.commit()
+    question_id = question.id
+    db.close()
+
+    # Skip question
+    res_skip = client.post(f"/questions/{question_id}/skip")
+    assert res_skip.status_code == status.HTTP_201_CREATED
+
+    # Attempt to submit text answer
+    res_ans = client.post(f"/questions/{question_id}/answer", json={"transcript_text": "My answer"})
+    assert res_ans.status_code == status.HTTP_400_BAD_REQUEST
+    assert "already been skipped" in res_ans.json()["detail"].lower()
+
+
+def test_submit_audio_answer_already_skipped_rejected(client):
+    """POST /questions/{question_id}/answer/audio returns 400 if question was skipped."""
+    db = SessionLocal()
+    session = InterviewSession(candidate_name="Skip Then Audio")
+    db.add(session)
+    db.commit()
+
+    question = Question(session_id=session.id, question_index=0, question_text="Q1")
+    db.add(question)
+    db.commit()
+    question_id = question.id
+    db.close()
+
+    # Skip question
+    res_skip = client.post(f"/questions/{question_id}/skip")
+    assert res_skip.status_code == status.HTTP_201_CREATED
+
+    # Attempt to submit audio answer
+    res_audio = client.post(
+        f"/questions/{question_id}/answer/audio",
+        files={"file": ("audio.wav", b"audio-bytes", "audio/wav")},
+    )
+    assert res_audio.status_code == status.HTTP_400_BAD_REQUEST
+    assert "already been skipped" in res_audio.json()["detail"].lower()
+
+
+def test_skip_advances_next_unanswered_question(client):
+    """Skipping a question allows GET /sessions/{session_id}/questions/next to advance correctly."""
+    db = SessionLocal()
+    session = InterviewSession(candidate_name="Advance Flow")
+    db.add(session)
+    db.commit()
+
+    q0 = Question(session_id=session.id, question_index=0, question_text="Question 0")
+    q1 = Question(session_id=session.id, question_index=1, question_text="Question 1")
+    q2 = Question(session_id=session.id, question_index=2, question_text="Question 2")
+    db.add_all([q0, q1, q2])
+    db.commit()
+    session_id = session.id
+    q0_id, q1_id, q2_id = q0.id, q1.id, q2.id
+    db.close()
+
+    # 1. Next question is q0
+    r0 = client.get(f"/sessions/{session_id}/questions/next")
+    assert r0.status_code == status.HTTP_200_OK
+    assert r0.json()["id"] == q0_id
+
+    # 2. Skip q0
+    skip_res = client.post(f"/questions/{q0_id}/skip")
+    assert skip_res.status_code == status.HTTP_201_CREATED
+
+    # 3. Next question is now q1
+    r1 = client.get(f"/sessions/{session_id}/questions/next")
+    assert r1.status_code == status.HTTP_200_OK
+    assert r1.json()["id"] == q1_id
+
+    # 4. Answer q1
+    ans_res = client.post(f"/questions/{q1_id}/answer", json={"transcript_text": "Answer 1"})
+    assert ans_res.status_code == status.HTTP_201_CREATED
+
+    # 5. Next question is now q2
+    r2 = client.get(f"/sessions/{session_id}/questions/next")
+    assert r2.status_code == status.HTTP_200_OK
+    assert r2.json()["id"] == q2_id
+
+    # 6. Skip q2
+    skip_res2 = client.post(f"/questions/{q2_id}/skip")
+    assert skip_res2.status_code == status.HTTP_201_CREATED
+
+    # 7. No more unanswered questions -> 404
+    r_done = client.get(f"/sessions/{session_id}/questions/next")
+    assert r_done.status_code == status.HTTP_404_NOT_FOUND
+
+
+
