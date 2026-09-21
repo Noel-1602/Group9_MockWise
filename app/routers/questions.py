@@ -2,7 +2,7 @@ import json
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -294,11 +294,72 @@ async def submit_audio_answer(
 )
 def get_question_audio(
     question_id: str,
+    request: Request,
     db: Session = Depends(get_db),
 ):
-    """Synthesize speech audio for the question text and return as WAV audio bytes."""
+    """Synthesize speech audio for the question text and return as WAV audio bytes with HTTP Range support."""
     question = _get_question_or_404(question_id, db)
     audio_bytes = synthesize_speech(question.question_text, backend="mock")
-    return Response(content=audio_bytes, media_type="audio/wav")
+    file_size = len(audio_bytes)
+
+    range_header = request.headers.get("range")
+    if range_header and range_header.strip().startswith("bytes="):
+        range_spec = range_header.strip()[6:].strip()
+        first_range = range_spec.split(",")[0].strip()
+        if "-" in first_range:
+            start_str, end_str = first_range.split("-", 1)
+            start_str = start_str.strip()
+            end_str = end_str.strip()
+
+            try:
+                if start_str and end_str:
+                    start = int(start_str)
+                    end = int(end_str)
+                elif start_str:
+                    start = int(start_str)
+                    end = file_size - 1
+                elif end_str:
+                    suffix_length = int(end_str)
+                    start = max(0, file_size - suffix_length)
+                    end = file_size - 1
+                else:
+                    start = 0
+                    end = file_size - 1
+
+                if start < 0 or start >= file_size or end < start:
+                    return Response(
+                        status_code=status.HTTP_416_REQUESTED_RANGE_NOT_SATISFIABLE,
+                        headers={
+                            "Content-Range": f"bytes */{file_size}",
+                            "Accept-Ranges": "bytes",
+                        },
+                    )
+
+                end = min(end, file_size - 1)
+                chunk = audio_bytes[start : end + 1]
+                content_length = len(chunk)
+
+                return Response(
+                    content=chunk,
+                    status_code=status.HTTP_206_PARTIAL_CONTENT,
+                    media_type="audio/wav",
+                    headers={
+                        "Content-Range": f"bytes {start}-{end}/{file_size}",
+                        "Accept-Ranges": "bytes",
+                        "Content-Length": str(content_length),
+                    },
+                )
+            except ValueError:
+                pass
+
+    return Response(
+        content=audio_bytes,
+        status_code=status.HTTP_200_OK,
+        media_type="audio/wav",
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(file_size),
+        },
+    )
 
 

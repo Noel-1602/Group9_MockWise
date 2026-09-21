@@ -253,12 +253,27 @@ def test_get_question_audio_flow(client):
     question_data = res_next.json()
     question_id = question_data["id"]
 
-    # Call GET /questions/{question_id}/audio
+    # Call GET /questions/{question_id}/audio (plain request, no Range header)
     audio_res = client.get(f"/questions/{question_id}/audio")
     assert audio_res.status_code == status.HTTP_200_OK
     assert "audio/wav" in audio_res.headers.get("content-type", "")
+    assert audio_res.headers.get("accept-ranges") == "bytes"
+    assert audio_res.headers.get("content-length") == str(len(audio_res.content))
     assert audio_res.content.startswith(b"RIFF")
     assert audio_res.content[8:12] == b"WAVE"
+
+    # Call GET /questions/{question_id}/audio with Range: bytes=0-1
+    total_len = len(audio_res.content)
+    range_res = client.get(
+        f"/questions/{question_id}/audio",
+        headers={"Range": "bytes=0-1"},
+    )
+    assert range_res.status_code == status.HTTP_206_PARTIAL_CONTENT
+    assert len(range_res.content) == 2
+    assert range_res.headers.get("content-range") == f"bytes 0-1/{total_len}"
+    assert range_res.headers.get("content-length") == "2"
+    assert range_res.headers.get("accept-ranges") == "bytes"
+    assert range_res.content == audio_res.content[0:2]
 
 
 def test_get_question_audio_not_found(client):
