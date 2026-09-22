@@ -153,3 +153,14 @@ def test_mock_backend_handles_empty_resume():
         assert len(q.question_text.strip()) > 0
 
     assert len({q.question_text for q in questions}) == 7
+
+
+def test_repeated_calls_produce_varying_question_sets(well_populated_resume):
+    """Verify multiple calls for the same resume produce varying question sets/ordering."""
+    runs = [
+        [q.question_text for q in generate_questions(well_populated_resume, backend="mock")]
+        for _ in range(10)
+    ]
+    # At least two distinct question sequences across 10 runs
+    unique_runs = {tuple(run) for run in runs}
+    assert len(unique_runs) > 1

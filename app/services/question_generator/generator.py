@@ -70,6 +70,16 @@ def _mock_generate(
     ]
     available_experience = [e.strip() for e in resume.experience if e and e.strip()]
 
+    # Shuffle copies of items using unseeded randomness so each generation call produces fresh combinations
+    shuffled_skills = list(available_skills)
+    random.shuffle(shuffled_skills)
+    shuffled_projects = list(available_projects)
+    random.shuffle(shuffled_projects)
+    shuffled_experience = list(available_experience)
+    random.shuffle(shuffled_experience)
+    shuffled_general = list(_GENERAL_QUESTION_POOL)
+    random.shuffle(shuffled_general)
+
     questions: List[GeneratedQuestion] = []
     seen_texts: set = set()
 
@@ -82,8 +92,8 @@ def _mock_generate(
         added_in_round = False
 
         # 1. Skill item
-        if skill_idx < len(available_skills) and len(questions) < target_resume_specific:
-            skill = available_skills[skill_idx]
+        if skill_idx < len(shuffled_skills) and len(questions) < target_resume_specific:
+            skill = shuffled_skills[skill_idx]
             skill_idx += 1
             q_text = f"Can you describe your experience and key achievements using {skill}?"
             if q_text not in seen_texts:
@@ -94,8 +104,8 @@ def _mock_generate(
                 added_in_round = True
 
         # 2. Project item
-        if project_idx < len(available_projects) and len(questions) < target_resume_specific:
-            proj = available_projects[project_idx]
+        if project_idx < len(shuffled_projects) and len(questions) < target_resume_specific:
+            proj = shuffled_projects[project_idx]
             project_idx += 1
             proj_title = proj.title.strip() if proj.title and proj.title.strip() else proj.description.strip()
             q_text = f"Could you walk me through the architecture and technical challenges of '{proj_title}'?"
@@ -107,8 +117,8 @@ def _mock_generate(
                 added_in_round = True
 
         # 3. Experience item
-        if experience_idx < len(available_experience) and len(questions) < target_resume_specific:
-            exp = available_experience[experience_idx]
+        if experience_idx < len(shuffled_experience) and len(questions) < target_resume_specific:
+            exp = shuffled_experience[experience_idx]
             experience_idx += 1
             q_text = f"In your experience regarding '{exp}', what were your primary responsibilities and major accomplishments?"
             if q_text not in seen_texts:
@@ -124,8 +134,8 @@ def _mock_generate(
     # Fill remaining slots up to target_count with general questions from the pool
     gen_idx = 0
     while len(questions) < target_count:
-        if gen_idx < len(_GENERAL_QUESTION_POOL):
-            q_text = _GENERAL_QUESTION_POOL[gen_idx]
+        if gen_idx < len(shuffled_general):
+            q_text = shuffled_general[gen_idx]
             gen_idx += 1
         else:
             q_text = f"Can you describe a challenging engineering scenario you encountered and how you handled it? (Part {len(questions) + 1})"

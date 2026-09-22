@@ -148,3 +148,48 @@ def test_e2e_resume_upload_question_generation_and_answering_flow(client):
     exhausted_res = client.get(f"/sessions/{session_id}/questions/next")
     assert exhausted_res.status_code == status.HTTP_404_NOT_FOUND
     assert "no unanswered questions" in exhausted_res.json()["detail"].lower()
+
+
+def test_two_sessions_same_resume_generate_different_question_sets(client):
+    """Verify that uploading the same resume across distinct sessions produces differing question sets."""
+    pdf_bytes = _make_sample_resume_pdf()
+
+    # Create session 1 and upload resume
+    res1 = client.post("/sessions", json={"candidate_name": "Jane Doe 1", "resume_filename": "resume.pdf"})
+    assert res1.status_code == status.HTTP_201_CREATED
+    s1_id = res1.json()["id"]
+
+    upload1 = client.post(
+        f"/sessions/{s1_id}/resume",
+        files={"file": ("resume.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert upload1.status_code == status.HTTP_201_CREATED
+
+    session1 = client.get(f"/sessions/{s1_id}").json()
+    q_texts_1 = [q["question_text"] for q in session1["questions"]]
+
+    # Create session 2 and upload identical resume
+    res2 = client.post("/sessions", json={"candidate_name": "Jane Doe 2", "resume_filename": "resume.pdf"})
+    assert res2.status_code == status.HTTP_201_CREATED
+    s2_id = res2.json()["id"]
+
+    upload2 = client.post(
+        f"/sessions/{s2_id}/resume",
+        files={"file": ("resume.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert upload2.status_code == status.HTTP_201_CREATED
+
+    session2 = client.get(f"/sessions/{s2_id}").json()
+    q_texts_2 = [q["question_text"] for q in session2["questions"]]
+
+    # Multiple distinct sessions with identical resume produce different question sequences / sets
+    # (If by low chance 1 attempt matches, we do a few iterations to ensure variance is demonstrated)
+    attempts = 0
+    while q_texts_1 == q_texts_2 and attempts < 5:
+        attempts += 1
+        res = client.post("/sessions", json={"candidate_name": f"Jane Doe {attempts + 2}", "resume_filename": "resume.pdf"})
+        s_id = res.json()["id"]
+        client.post(f"/sessions/{s_id}/resume", files={"file": ("resume.pdf", pdf_bytes, "application/pdf")})
+        q_texts_2 = [q["question_text"] for q in client.get(f"/sessions/{s_id}").json()["questions"]]
+
+    assert q_texts_1 != q_texts_2
