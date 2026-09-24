@@ -42,6 +42,8 @@ export default function InterviewPage({
   // TODO: restore once Piper is wired
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
 
+  // TEMP: disabled for STT accuracy debugging — re-enable after testing
+  /*
   useEffect(() => {
     if (typeof window !== "undefined") {
       const isSupported = Boolean(
@@ -51,6 +53,7 @@ export default function InterviewPage({
       setHasSpeechRecognitionSupport(isSupported);
     }
   }, []);
+  */
 
   // Temporary frontend-only TTS shim using window.speechSynthesis for demo purposes
   const speakQuestion = useCallback((text: string) => {
@@ -221,6 +224,8 @@ export default function InterviewPage({
       if (typeof window !== "undefined" && "speechSynthesis" in window) {
         window.speechSynthesis.cancel();
       }
+      // TEMP: disabled for STT accuracy debugging — re-enable after testing
+      /*
       if (recognitionRef.current) {
         try {
           recognitionRef.current.stop();
@@ -229,6 +234,7 @@ export default function InterviewPage({
         }
         recognitionRef.current = null;
       }
+      */
       // TODO: restore once Piper is wired
       if (audioPlayerRef.current) {
         audioPlayerRef.current.pause();
@@ -266,6 +272,8 @@ export default function InterviewPage({
       mediaRecorder.start();
       setIsRecording(true);
 
+      // TEMP: disabled for STT accuracy debugging — re-enable after testing
+      /*
       // Start live speech recognition if supported (temporary frontend preview)
       if (typeof window !== "undefined") {
         const SpeechRecognitionClass =
@@ -315,6 +323,7 @@ export default function InterviewPage({
           }
         }
       }
+      */
     } catch (err: unknown) {
       const msg =
         err instanceof Error
@@ -334,6 +343,8 @@ export default function InterviewPage({
     }
     setIsPlayingAudio(false);
 
+    // TEMP: disabled for STT accuracy debugging — re-enable after testing
+    /*
     // Stop live recognition
     if (recognitionRef.current) {
       try {
@@ -343,6 +354,7 @@ export default function InterviewPage({
       }
       recognitionRef.current = null;
     }
+    */
 
     const mediaRecorder = mediaRecorderRef.current;
 
@@ -413,6 +425,8 @@ export default function InterviewPage({
     }
     setIsPlayingAudio(false);
 
+    // TEMP: disabled for STT accuracy debugging — re-enable after testing
+    /*
     // Stop live recognition
     if (recognitionRef.current) {
       try {
@@ -422,6 +436,7 @@ export default function InterviewPage({
       }
       recognitionRef.current = null;
     }
+    */
     setLiveTranscript({ final: "", interim: "" });
 
     // Stop recording if active
@@ -473,6 +488,8 @@ export default function InterviewPage({
     }
     setIsPlayingAudio(false);
 
+    // TEMP: disabled for STT accuracy debugging — re-enable after testing
+    /*
     // Stop live recognition
     if (recognitionRef.current) {
       try {
@@ -482,6 +499,7 @@ export default function InterviewPage({
       }
       recognitionRef.current = null;
     }
+    */
     setLiveTranscript({ final: "", interim: "" });
 
     // Stop recording if active
@@ -689,8 +707,9 @@ export default function InterviewPage({
               )}
             </div>
 
+            {/* TEMP: disabled for STT accuracy debugging — re-enable after testing */}
             {/* Live Transcription Preview (Client-side SpeechRecognition) */}
-            {(isRecording || (isSubmitting && (liveTranscript.final || liveTranscript.interim))) && hasSpeechRecognitionSupport && (
+            {/* {(isRecording || (isSubmitting && (liveTranscript.final || liveTranscript.interim))) && hasSpeechRecognitionSupport && (
               <div className="w-full max-w-lg mx-auto p-3.5 bg-slate-50 border border-slate-200 rounded-lg text-left shadow-sm transition-all">
                 <div className="flex items-center justify-between gap-2 mb-1.5 text-xs font-semibold text-slate-500 uppercase tracking-wider">
                   <span className="flex items-center gap-1.5 text-indigo-600">
@@ -717,7 +736,7 @@ export default function InterviewPage({
                   </p>
                 )}
               </div>
-            )}
+            )} */}
 
             {/* Skip Button - positioned separately */}
             <div className="pt-2">

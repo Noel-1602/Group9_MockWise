@@ -24,7 +24,7 @@ export default function Home() {
             Start Mock Interview
           </Link>
           <Link
-            href="/report/2aae9958-4b31-4838-bd98-e45ddbdfa1a1"
+            href="/report/5fce2a64-3db9-41bc-bd7e-c75cd8ff0d64"
             className="text-sm font-medium text-slate-500 hover:text-indigo-600 transition-colors underline decoration-slate-300 underline-offset-4 hover:decoration-indigo-600"
           >
             View a sample report &rarr;
