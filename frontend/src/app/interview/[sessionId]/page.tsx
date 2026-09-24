@@ -151,9 +151,36 @@ export default function InterviewPage({
       );
 
       if (res.status === 404) {
-        // No more questions, interview complete
-        router.push(`/report/${sessionId}`);
-        return;
+        // No more questions, complete session and redirect to report
+        try {
+          const completeRes = await fetch(
+            `${BACKEND_BASE_URL}/sessions/${sessionId}/complete`,
+            {
+              method: "POST",
+            }
+          );
+
+          if (!completeRes.ok) {
+            let errMsg = "Failed to complete interview.";
+            try {
+              const errData = await completeRes.json();
+              errMsg = errData.detail || errMsg;
+            } catch {
+              // fallback
+            }
+            throw new Error(errMsg);
+          }
+
+          router.push(`/report/${sessionId}`);
+          return;
+        } catch (completeErr: unknown) {
+          const msg =
+            completeErr instanceof Error
+              ? completeErr.message
+              : "Failed to complete interview.";
+          setError(msg);
+          return;
+        }
       }
 
       if (!res.ok) {
