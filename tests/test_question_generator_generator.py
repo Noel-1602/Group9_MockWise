@@ -122,11 +122,232 @@ def test_mock_backend_default_parameter(well_populated_resume):
     assert 6 <= len(questions) <= 8
 
 
-@pytest.mark.parametrize("backend", ["ollama", "groq"])
-def test_unimplemented_backends_raise_not_implemented(well_populated_resume, backend):
-    """Verify calling with backend='ollama' or 'groq' raises NotImplementedError."""
+def test_ollama_backend_raises_not_implemented(well_populated_resume):
+    """Verify calling with backend='ollama' raises NotImplementedError."""
     with pytest.raises(NotImplementedError):
-        generate_questions(well_populated_resume, backend=backend)
+        generate_questions(well_populated_resume, backend="ollama")
+
+
+def test_groq_backend_missing_api_key_raises_environment_error(well_populated_resume, monkeypatch):
+    """Verify groq backend raises EnvironmentError when GROQ_API_KEY is unset."""
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+    with pytest.raises(EnvironmentError, match="GROQ_API_KEY"):
+        generate_questions(well_populated_resume, backend="groq")
+
+
+def test_groq_backend_successful_mocked_call(well_populated_resume, monkeypatch):
+    """Verify groq backend correctly formats prompts, calls Groq client, and parses response."""
+    monkeypatch.setenv("GROQ_API_KEY", "mock_key")
+
+    mock_llm_json = """
+    {
+      "questions": [
+        {"question_text": "How did you scale Celery and Redis in TaskMaster?", "type": "resume_specific"},
+        {"question_text": "Can you discuss your experience using FastAPI and Python?", "type": "resume_specific"},
+        {"question_text": "What challenges did you face building CloudMetrics?", "type": "resume_specific"},
+        {"question_text": "Tell me about your time as Senior Software Engineer at Acme Corp.", "type": "resume_specific"},
+        {"question_text": "How do you handle technical disagreements in a team?", "type": "general"},
+        {"question_text": "What is your approach to system reliability and monitoring?", "type": "general"},
+        {"question_text": "Describe a difficult debugging scenario you resolved.", "type": "general"}
+      ]
+    }
+    """
+
+    class MockChoice:
+        message = type("Message", (), {"content": mock_llm_json})()
+
+    class MockCompletion:
+        choices = [MockChoice()]
+
+    captured_call = {}
+
+    class MockCompletionsResource:
+        def create(self, **kwargs):
+            captured_call.update(kwargs)
+            return MockCompletion()
+
+    class MockChatResource:
+        completions = MockCompletionsResource()
+
+    class MockGroqClient:
+        def __init__(self, api_key=None):
+            self.api_key = api_key
+            self.chat = MockChatResource()
+
+    monkeypatch.setattr("groq.Groq", MockGroqClient)
+
+    questions = generate_questions(well_populated_resume, backend="groq", count=7)
+
+    assert len(questions) == 7
+    assert captured_call.get("model") == "openai/gpt-oss-120b"
+    assert captured_call.get("temperature") == 0.7
+    assert any("TaskMaster" in msg["content"] or "Python" in msg["content"] for msg in captured_call.get("messages", []))
+
+    specific_count = sum(1 for q in questions if q.type == "resume_specific")
+    general_count = sum(1 for q in questions if q.type == "general")
+    assert specific_count == 4
+    assert general_count == 3
+    assert all(isinstance(q, GeneratedQuestion) for q in questions)
+
+
+def test_groq_backend_handles_markdown_code_fences(well_populated_resume, monkeypatch):
+    """Verify groq backend strips markdown code fences before parsing JSON."""
+    monkeypatch.setenv("GROQ_API_KEY", "mock_key")
+
+    mock_llm_fenced_json = """```json
+    {
+      "questions": [
+        {"question_text": "Can you explain your work with Docker and Kubernetes?", "type": "resume_specific"},
+        {"question_text": "How do you design REST APIs in FastAPI?", "type": "resume_specific"},
+        {"question_text": "Describe your background at Acme Corp.", "type": "resume_specific"},
+        {"question_text": "What is your philosophy on writing automated tests?", "type": "general"},
+        {"question_text": "Tell me about a time you led an incident response.", "type": "general"},
+        {"question_text": "How do you stay up-to-date with emerging tech?", "type": "general"}
+      ]
+    }
+    ```"""
+
+    class MockChoice:
+        message = type("Message", (), {"content": mock_llm_fenced_json})()
+
+    class MockCompletion:
+        choices = [MockChoice()]
+
+    class MockCompletionsResource:
+        def create(self, **kwargs):
+            return MockCompletion()
+
+    class MockChatResource:
+        completions = MockCompletionsResource()
+
+    class MockGroqClient:
+        def __init__(self, api_key=None):
+            self.chat = MockChatResource()
+
+    monkeypatch.setattr("groq.Groq", MockGroqClient)
+
+    questions = generate_questions(well_populated_resume, backend="groq", count=6)
+    assert len(questions) == 6
+    assert questions[0].question_text == "Can you explain your work with Docker and Kubernetes?"
+    assert questions[0].type == "resume_specific"
+
+
+def test_groq_backend_invalid_json_raises_value_error(well_populated_resume, monkeypatch):
+    """Verify invalid JSON from Groq raises a descriptive ValueError."""
+    monkeypatch.setenv("GROQ_API_KEY", "mock_key")
+
+    class MockChoice:
+        message = type("Message", (), {"content": "This is not valid JSON content."})()
+
+    class MockCompletion:
+        choices = [MockChoice()]
+
+    class MockCompletionsResource:
+        def create(self, **kwargs):
+            return MockCompletion()
+
+    class MockChatResource:
+        completions = MockCompletionsResource()
+
+    class MockGroqClient:
+        def __init__(self, api_key=None):
+            self.chat = MockChatResource()
+
+    monkeypatch.setattr("groq.Groq", MockGroqClient)
+
+    with pytest.raises(ValueError, match="Failed to parse JSON"):
+        generate_questions(well_populated_resume, backend="groq")
+
+
+def test_groq_backend_thin_resume_handles_generation(thin_resume, monkeypatch):
+    """Verify groq backend with thin resume generates questions without error."""
+    monkeypatch.setenv("GROQ_API_KEY", "mock_key")
+
+    mock_llm_json = """
+    {
+      "questions": [
+        {"question_text": "What experience do you have with Python programming?", "type": "resume_specific"},
+        {"question_text": "How do you approach debugging difficult software issues?", "type": "general"},
+        {"question_text": "Can you describe a time when you had to learn something quickly?", "type": "general"},
+        {"question_text": "What strategies do you use for clean code architecture?", "type": "general"},
+        {"question_text": "How do you handle deadlines and project prioritization?", "type": "general"},
+        {"question_text": "Tell me about a challenging project you contributed to.", "type": "general"}
+      ]
+    }
+    """
+
+    class MockChoice:
+        message = type("Message", (), {"content": mock_llm_json})()
+
+    class MockCompletion:
+        choices = [MockChoice()]
+
+    captured_call = {}
+
+    class MockCompletionsResource:
+        def create(self, **kwargs):
+            captured_call.update(kwargs)
+            return MockCompletion()
+
+    class MockChatResource:
+        completions = MockCompletionsResource()
+
+    class MockGroqClient:
+        def __init__(self, api_key=None):
+            self.chat = MockChatResource()
+
+    monkeypatch.setattr("groq.Groq", MockGroqClient)
+
+    questions = generate_questions(thin_resume, backend="groq")
+    assert len(questions) == 6
+    assert questions[0].type == "resume_specific"
+    assert sum(1 for q in questions if q.type == "general") == 5
+
+
+def test_groq_backend_empty_questions_raises_value_error(well_populated_resume, monkeypatch):
+    """Verify empty questions list from Groq raises ValueError."""
+    monkeypatch.setenv("GROQ_API_KEY", "mock_key")
+
+    mock_llm_json = '{"questions": []}'
+
+    class MockChoice:
+        message = type("Message", (), {"content": mock_llm_json})()
+
+    class MockCompletion:
+        choices = [MockChoice()]
+
+    class MockCompletionsResource:
+        def create(self, **kwargs):
+            return MockCompletion()
+
+    class MockChatResource:
+        completions = MockCompletionsResource()
+
+    class MockGroqClient:
+        def __init__(self, api_key=None):
+            self.chat = MockChatResource()
+
+    monkeypatch.setattr("groq.Groq", MockGroqClient)
+
+    with pytest.raises(ValueError, match="no valid questions"):
+        generate_questions(well_populated_resume, backend="groq")
+
+
+def test_groq_backend_missing_package_raises_import_error(well_populated_resume, monkeypatch):
+    """Verify missing groq module raises ImportError."""
+    monkeypatch.setenv("GROQ_API_KEY", "mock_key")
+    import builtins
+    real_import = builtins.__import__
+
+    def mock_import(name, *args, **kwargs):
+        if name == "groq":
+            raise ImportError("No module named 'groq'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", mock_import)
+
+    with pytest.raises(ImportError, match="The 'groq' package is required"):
+        generate_questions(well_populated_resume, backend="groq")
 
 
 def test_unknown_backend_raises_value_error(well_populated_resume):
