@@ -3,52 +3,25 @@ from unittest.mock import patch
 import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, event
-from sqlalchemy.engine import Engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
-from app.database import Base, get_db
+from app.database import Base, SessionLocal, engine, get_db
 from app.models import Question
 from app.main import app
-
-# SQLite in-memory with StaticPool to share a single connection and in-memory state
-SQLALCHEMY_TEST_DATABASE_URL = "sqlite:///:memory:"
-
-test_engine = create_engine(
-    SQLALCHEMY_TEST_DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
-
-
-@event.listens_for(Engine, "connect")
-def set_sqlite_pragma(dbapi_connection, connection_record):
-    cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA foreign_keys=ON")
-    cursor.close()
-
-
-TestingSessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    bind=test_engine,
-)
 
 
 @pytest.fixture(autouse=True)
 def setup_database():
-    """Create all tables in memory before each test and drop them after."""
-    Base.metadata.create_all(bind=test_engine)
+    """Create all tables before each test and drop them after."""
+    Base.metadata.create_all(bind=engine)
     yield
-    Base.metadata.drop_all(bind=test_engine)
+    Base.metadata.drop_all(bind=engine)
 
 
 @pytest.fixture
 def client():
-    """TestClient using the in-memory SQLite database with StaticPool."""
+    """TestClient using the isolated test database."""
     def override_get_db():
-        db = TestingSessionLocal()
+        db = SessionLocal()
         try:
             yield db
         finally:
@@ -136,7 +109,7 @@ def test_full_session_flow_and_duplicate_answer_rejection(client):
     session_id = session_data["id"]
 
     # 2. Populate a question for the session
-    db = TestingSessionLocal()
+    db = SessionLocal()
     q = Question(
         session_id=session_id,
         question_index=0,
@@ -384,7 +357,7 @@ def test_session_summary_manual_question_mix(client):
     session_id = create_res.json()["id"]
 
     # Add 3 questions: 2 resume_specific, 1 general
-    db = TestingSessionLocal()
+    db = SessionLocal()
     q1 = Question(
         session_id=session_id,
         question_index=0,

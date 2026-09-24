@@ -4,51 +4,24 @@ import pytest
 from fastapi import status
 from fastapi.testclient import TestClient
 from reportlab.pdfgen import canvas
-from sqlalchemy import create_engine, event
-from sqlalchemy.engine import Engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
-from app.database import Base, get_db
+from app.database import Base, SessionLocal, engine, get_db
 from app.main import app
-
-# SQLite in-memory database with StaticPool to share connection state across requests
-SQLALCHEMY_TEST_DATABASE_URL = "sqlite:///:memory:"
-
-test_engine = create_engine(
-    SQLALCHEMY_TEST_DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
-
-
-@event.listens_for(Engine, "connect")
-def set_sqlite_pragma(dbapi_connection, connection_record):
-    cursor = dbapi_connection.cursor()
-    cursor.execute("PRAGMA foreign_keys=ON")
-    cursor.close()
-
-
-TestingSessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    bind=test_engine,
-)
 
 
 @pytest.fixture(autouse=True)
 def setup_database():
-    """Create all tables in memory before each test and drop them after."""
-    Base.metadata.create_all(bind=test_engine)
+    """Create all tables before each test and drop them after."""
+    Base.metadata.create_all(bind=engine)
     yield
-    Base.metadata.drop_all(bind=test_engine)
+    Base.metadata.drop_all(bind=engine)
 
 
 @pytest.fixture
 def client():
-    """TestClient using the in-memory SQLite database with dependency override."""
+    """TestClient using the isolated test database with dependency override."""
     def override_get_db():
-        db = TestingSessionLocal()
+        db = SessionLocal()
         try:
             yield db
         finally:

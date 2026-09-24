@@ -23,6 +23,8 @@ htmlcov/
 # MockWise Database & Local Storage Outputs
 *.db
 *.sqlite3
+test_mockwise.db
+test_*.db
 backend/storage/audio/*
 backend/storage/reports/*
 backend/storage/uploads/*
