@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
@@ -60,7 +61,8 @@ def generate_and_save_questions_for_session(
         else:
             parsed_resume = ParsedResume()
 
-    generated_questions = generate_questions(parsed_resume, backend="mock", count=None)
+    backend = os.environ.get("QUESTION_GENERATOR_BACKEND", "mock")
+    generated_questions = generate_questions(parsed_resume, backend=backend, count=None)
 
     created_questions: List[Question] = []
     for idx, gq in enumerate(generated_questions):
@@ -259,8 +261,9 @@ async def submit_audio_answer(
 
     audio_bytes = await file.read()
 
+    stt_backend = os.environ.get("STT_BACKEND", "mock")
     try:
-        transcript_text = transcribe_audio(audio_bytes, backend="mock")
+        transcript_text = transcribe_audio(audio_bytes, backend=stt_backend)
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

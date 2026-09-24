@@ -575,4 +575,120 @@ def test_skip_advances_next_unanswered_question(client):
     assert r_done.status_code == status.HTTP_404_NOT_FOUND
 
 
+def test_session_question_generation_with_groq_backend_and_idempotency(client, monkeypatch):
+    """Verify QUESTION_GENERATOR_BACKEND='groq' generates questions and adheres to idempotency guard."""
+    monkeypatch.setenv("QUESTION_GENERATOR_BACKEND", "groq")
+    monkeypatch.setenv("GROQ_API_KEY", "mock_key")
+
+    mock_llm_json = """
+    {
+      "questions": [
+        {"question_text": "Tell me about your Python and FastAPI work.", "type": "resume_specific"},
+        {"question_text": "How did you build MockWise?", "type": "resume_specific"},
+        {"question_text": "Can you discuss Docker and SQL in your stack?", "type": "resume_specific"},
+        {"question_text": "Tell me about Acme Corp projects.", "type": "resume_specific"},
+        {"question_text": "How do you handle conflict in code reviews?", "type": "general"},
+        {"question_text": "Describe your testing strategy.", "type": "general"},
+        {"question_text": "Where do you see yourself technically in 3 years?", "type": "general"}
+      ]
+    }
+    """
+
+    class MockChoice:
+        message = type("Message", (), {"content": mock_llm_json})()
+
+    class MockCompletion:
+        choices = [MockChoice()]
+
+    call_count = {"count": 0}
+
+    class MockCompletionsResource:
+        def create(self, **kwargs):
+            call_count["count"] += 1
+            return MockCompletion()
+
+    class MockChatResource:
+        completions = MockCompletionsResource()
+
+    class MockGroqClient:
+        def __init__(self, api_key=None):
+            self.chat = MockChatResource()
+
+    monkeypatch.setattr("groq.Groq", MockGroqClient)
+
+    # 1. Create session
+    create_res = client.post("/sessions", json={"candidate_name": "Test User", "resume_filename": "resume.pdf"})
+    assert create_res.status_code == status.HTTP_201_CREATED
+    session_id = create_res.json()["id"]
+
+    # 2. Upload resume -> triggers Groq backend
+    pdf_bytes = _make_sample_resume_pdf()
+    upload_res = client.post(
+        f"/sessions/{session_id}/resume",
+        files={"file": ("resume.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert upload_res.status_code == status.HTTP_201_CREATED
+    assert call_count["count"] == 1
+
+    # Verify questions generated
+    session_res = client.get(f"/sessions/{session_id}")
+    assert session_res.status_code == status.HTTP_200_OK
+    questions = session_res.json()["questions"]
+    assert len(questions) == 7
+    assert questions[0]["question_text"] == "Tell me about your Python and FastAPI work."
+
+    # 3. Trigger again (idempotency guard) -> must NOT re-call Groq or add duplicate questions
+    upload_res2 = client.post(
+        f"/sessions/{session_id}/resume",
+        files={"file": ("resume_v2.pdf", pdf_bytes, "application/pdf")},
+    )
+    assert upload_res2.status_code == status.HTTP_201_CREATED
+    assert call_count["count"] == 1  # Not incremented due to idempotency guard
+
+    session_res2 = client.get(f"/sessions/{session_id}")
+    assert len(session_res2.json()["questions"]) == 7
+
+
+def test_submit_audio_answer_with_faster_whisper_backend(client, monkeypatch):
+    """Verify POST /questions/{question_id}/answer/audio uses faster_whisper STT backend when configured."""
+    monkeypatch.setenv("STT_BACKEND", "faster_whisper")
+
+    class MockSegment:
+        def __init__(self, text: str):
+            self.text = text
+
+    class MockWhisperModel:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def transcribe(self, audio_file):
+            return [MockSegment("I designed and deployed scalable microservices.")], None
+
+    import app.services.stt.transcriber as stt_module
+    monkeypatch.setattr(stt_module, "_whisper_model", MockWhisperModel())
+
+    db = SessionLocal()
+    session = InterviewSession(candidate_name="Audio Test Candidate")
+    db.add(session)
+    db.commit()
+
+    question = Question(session_id=session.id, question_index=0, question_text="What are your key accomplishments?")
+    db.add(question)
+    db.commit()
+    question_id = question.id
+    db.close()
+
+    audio_bytes = b"RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00"
+    res = client.post(
+        f"/questions/{question_id}/answer/audio",
+        files={"file": ("speech.wav", audio_bytes, "audio/wav")},
+    )
+    assert res.status_code == status.HTTP_201_CREATED
+    data = res.json()
+    assert data["question_id"] == question_id
+    assert data["transcript_text"] == "I designed and deployed scalable microservices."
+
+
+
+
 
